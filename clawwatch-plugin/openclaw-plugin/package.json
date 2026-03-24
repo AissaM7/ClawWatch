@@ -1,0 +1,30 @@
+{
+  "name": "clawwatch",
+  "version": "0.1.0",
+  "description": "Deep observability plugin for OpenClaw — streams LLM calls, tool executions, and diagnostics to the ClawWatch dashboard",
+  "main": "index.ts",
+  "type": "module",
+  "keywords": [
+    "openclaw",
+    "observability",
+    "clawwatch",
+    "agent",
+    "monitoring"
+  ],
+  "license": "MIT",
+  "author": "ClawWatch Contributors",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/clawwatch/openclaw-plugin"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "openclaw": {
+    "pluginId": "clawwatch",
+    "displayName": "ClawWatch",
+    "emoji": "👁️",
+    "shape": "hook-only",
+    "extensions": ["./index.ts"]
+  }
+}

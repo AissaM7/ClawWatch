@@ -1,0 +1,48 @@
+[build-system]
+requires = ["setuptools>=45", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "clawwatch"
+version = "0.1.0"
+description = "Local-first observability, risk scoring, and hallucination detection for OpenClaw agents"
+readme = "README.md"
+requires-python = ">=3.9"
+license = {text = "MIT"}
+dependencies = []
+authors = [
+    {name = "ClawWatch Contributors"},
+]
+keywords = ["openclaw", "observability", "llm", "agent", "risk-scoring", "hallucination"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: System :: Monitoring",
+]
+
+[project.urls]
+Homepage = "https://github.com/clawwatch/clawwatch"
+Documentation = "https://github.com/clawwatch/clawwatch#readme"
+Repository = "https://github.com/clawwatch/clawwatch"
+Issues = "https://github.com/clawwatch/clawwatch/issues"
+Changelog = "https://github.com/clawwatch/clawwatch/blob/main/CHANGELOG.md"
+
+[project.entry-points."openclaw.plugins"]
+clawwatch = "clawwatch:ClawWatchPlugin"
+
+[project.scripts]
+clawwatch = "clawwatch.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["clawwatch*"]
+
+[tool.setuptools.package-data]
+clawwatch = ["static/**/*"]
