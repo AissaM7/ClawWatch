@@ -23,13 +23,13 @@ ClawWatch is a self-hosted observability platform purpose-built for **autonomous
 
 **Key capabilities:**
 
-- 🔍 **Hierarchical Trace Visualization** — Waterfall timeline grouped by conversation turns, with duration bars and cost tracking
-- 🧠 **Semantic Chunking MiniMap** — "God-mode" navigation via Intent Chapters that compress completed turns into scannable glass cards
-- ⚠️ **Risk Scoring Engine** — 16 built-in rules that flag dangerous operations (file deletion, env access, network exfiltration) with severity levels
-- 🎭 **Hallucination Detection** — Claim-level analysis of LLM outputs scored as Supported, Unsupported, or Contradicted
-- 🔄 **Multi-Agent Swarm Support** — Architecture-ready for visualizing agent delegation chains
-- 💰 **Cost Tracking** — Per-model token usage and estimated USD cost per run
-- 🔁 **Loop Detection** — Identifies when agents get stuck in repetitive action cycles
+-  **Hierarchical Trace Visualization** — Waterfall timeline grouped by conversation turns, with duration bars and cost tracking
+-  **Semantic Chunking MiniMap** — "God-mode" navigation via Intent Chapters that compress completed turns into scannable glass cards
+-  **Risk Scoring Engine** — 16 built-in rules that flag dangerous operations (file deletion, env access, network exfiltration) with severity levels
+-  **Hallucination Detection** — Claim-level analysis of LLM outputs scored as Supported, Unsupported, or Contradicted
+-  **Multi-Agent Swarm Support** — Architecture-ready for visualizing agent delegation chains
+-  **Cost Tracking** — Per-model token usage and estimated USD cost per run
+-  **Loop Detection** — Identifies when agents get stuck in repetitive action cycles
 
 ---
 
