@@ -58,7 +58,7 @@ def _make_handler(store_cls: type = EventStore):
 
         def _cors(self) -> None:
             self.send_header("Access-Control-Allow-Origin", "*")
-            self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+            self.send_header("Access-Control-Allow-Methods", "GET, POST, PATCH, OPTIONS")
             self.send_header("Access-Control-Allow-Headers", "Content-Type")
 
         def do_OPTIONS(self) -> None:  # noqa: N802
@@ -83,6 +83,53 @@ def _make_handler(store_cls: type = EventStore):
             elif path.startswith("/api/v1/runs/") and path.count("/") == 4:
                 run_id = path.split("/")[4]
                 events = store_cls.get_run_events(run_id)
+                self._json_response(events)
+
+            elif path == "/api/v1/agents":
+                agents = store_cls.list_agents()
+                self._json_response(agents)
+
+            elif path == "/api/v1/threads":
+                # Parse query param ?agent_id=...
+                qs = self.path.split("?")[1] if "?" in self.path else ""
+                agent_id = None
+                for param in qs.split("&"):
+                    if param.startswith("agent_id="):
+                        agent_id = param.split("=", 1)[1]
+                threads = store_cls.list_threads(agent_id)
+                self._json_response(threads)
+
+            elif path.startswith("/api/v1/threads/") and path.endswith("/tasks"):
+                thread_id = path.split("/")[4]
+                tasks = store_cls.get_thread_tasks(thread_id)
+                self._json_response(tasks)
+
+            elif path.startswith("/api/v1/threads/") and path.count("/") == 4:
+                thread_id = path.split("/")[4]
+                # Return thread detail with its tasks
+                tasks = store_cls.get_thread_tasks(thread_id)
+                self._json_response({"thread_id": thread_id, "tasks": tasks})
+
+            elif path.startswith("/api/v1/tasks/") and path.endswith("/exchanges"):
+                task_id = path.split("/")[4]
+                exchanges = store_cls.get_task_exchanges(task_id)
+                self._json_response(exchanges)
+
+            elif path.startswith("/api/v1/tasks/") and path.count("/") == 4:
+                task_id = path.split("/")[4]
+                task = store_cls.get_task(task_id)
+                self._json_response(task or {})
+
+            elif path.startswith("/api/v1/exchanges/") and path.endswith("/events"):
+                parts = path.split("/")
+                exchange_id = parts[4]
+                # Need run_id from query params
+                qs = self.path.split("?")[1] if "?" in self.path else ""
+                run_id = ""
+                for param in qs.split("&"):
+                    if param.startswith("run_id="):
+                        run_id = param.split("=", 1)[1]
+                events = store_cls.get_exchange_events(exchange_id, run_id)
                 self._json_response(events)
 
             elif path == "/api/v1/events/stream":
@@ -119,6 +166,30 @@ def _make_handler(store_cls: type = EventStore):
                     store_cls.add_review_note(run_id, event_id, note)
                     self._json_response({"ok": True})
                     return
+
+            self.send_response(404)
+            self._cors()
+            self.end_headers()
+
+        def do_PATCH(self) -> None:  # noqa: N802
+            path = self.path.split("?")[0]
+
+            # Normalize: /api/ -> /api/v1/
+            if path.startswith("/api/") and not path.startswith("/api/v1/"):
+                path = "/api/v1/" + path[len("/api/"):]
+
+            # PATCH /api/v1/threads/<thread_id> — rename thread
+            if path.startswith("/api/v1/threads/") and path.count("/") == 4:
+                thread_id = path.split("/")[4]
+                length = int(self.headers.get("Content-Length", 0))
+                body = json.loads(self.rfile.read(length)) if length else {}
+                display_name = body.get("display_name", "").strip()
+                if not display_name:
+                    self._json_response({"error": "display_name required"}, 400)
+                    return
+                ok = store_cls.rename_thread(thread_id, display_name)
+                self._json_response({"ok": ok})
+                return
 
             self.send_response(404)
             self._cors()

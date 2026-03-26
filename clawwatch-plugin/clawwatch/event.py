@@ -10,13 +10,13 @@ from typing import Any, Optional
 
 # All recognised event types
 EVENT_TYPES = [
-    "agent_start", "agent_end",
+    "agent_start", "agent_end", "agent_error", "agent_response",
     "tool_call_start", "tool_call_end", "tool_error",
     "llm_call_start", "llm_call_end", "llm_error",
     "file_read", "file_write", "file_delete",
     "network_request", "network_response",
     "subprocess_exec", "env_access",
-    "loop_detected",
+    "loop_detected", "user_prompt",
 ]
 
 

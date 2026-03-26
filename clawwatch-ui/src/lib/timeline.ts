@@ -50,7 +50,7 @@ export interface TimelineHierarchy {
 
 // ── Constants ────────────────────────────────────────────────────
 
-const TASK_GAP_THRESHOLD_MS = 60_000; // 60 seconds gap = new task
+// Task boundaries are determined by user_prompt events, not time gaps.
 
 // ── Risk level ordering ──────────────────────────────────────────
 
@@ -183,19 +183,25 @@ export function buildTimeline(enrichedEvents: EnrichedEvent[]): TimelineHierarch
     return { tasks: [], totalTasks: 0 };
   }
 
-  // Step 1: Split events into task groups by time gaps
+  // Step 1: Split events into task groups by user_prompt events.
+  // A new task begins ONLY when a user_prompt event arrives — this signals
+  // a genuinely new user message. Time gaps between internal events (LLM calls,
+  // retries, tool calls) do NOT create new task boundaries, even if 20+ minutes
+  // elapse due to timeouts or cold starts.
   const taskEventGroups: EnrichedEvent[][] = [[]];
   const taskGaps: number[] = [0];
 
   for (let i = 0; i < enrichedEvents.length; i++) {
     const event = enrichedEvents[i];
-    if (i > 0) {
-      const prev = enrichedEvents[i - 1];
-      const gap = event.run_offset_ms - prev.run_offset_ms;
-      if (gap >= TASK_GAP_THRESHOLD_MS) {
-        taskEventGroups.push([]);
-        taskGaps.push(gap);
-      }
+
+    // A user_prompt event means a new user message arrived → new task boundary
+    // (except for the very first event, which always goes into the first group)
+    if (event.event_type === 'user_prompt' && i > 0 && taskEventGroups[taskEventGroups.length - 1].length > 0) {
+      const prevGroup = taskEventGroups[taskEventGroups.length - 1];
+      const lastEventInPrev = prevGroup[prevGroup.length - 1];
+      const gap = event.run_offset_ms - lastEventInPrev.run_offset_ms;
+      taskEventGroups.push([]);
+      taskGaps.push(gap);
     }
     taskEventGroups[taskEventGroups.length - 1].push(event);
   }

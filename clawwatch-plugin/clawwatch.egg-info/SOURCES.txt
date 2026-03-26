@@ -17,4 +17,5 @@ clawwatch.egg-info/top_level.txt
 clawwatch/static/favicon.svg
 clawwatch/static/icons.svg
 clawwatch/static/index.html
-clawwatch/static/assets/index-F8Mr_qwi.css
+clawwatch/static/assets/index-ci78rLMi.css
+clawwatch/static/assets/index-yRTfhbvg.js

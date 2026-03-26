@@ -1,4 +1,7 @@
 import { BrowserRouter, Routes, Route, NavLink, useMatch, useLocation } from 'react-router-dom';
+import AgentList from './pages/AgentList';
+import ThreadList from './pages/ThreadList';
+import ThreadDetail from './pages/ThreadDetail';
 import RunList from './pages/RunList';
 import RunDetail from './pages/RunDetail';
 import RiskReview from './pages/RiskReview';
@@ -23,7 +26,13 @@ function AppNav() {
           to="/"
           className={({ isActive }) => isActive && location.pathname === '/' ? 'active' : ''}
         >
-          Runs
+          Agents
+        </NavLink>
+        <NavLink
+          to="/runs"
+          className={({ isActive }) => isActive ? 'active' : ''}
+        >
+          All Runs
         </NavLink>
         {runId && (
           <>
@@ -60,7 +69,10 @@ export default function App() {
         <AppNav />
         <div className="app-content">
           <Routes>
-            <Route path="/" element={<RunList />} />
+            <Route path="/" element={<AgentList />} />
+            <Route path="/runs" element={<RunList />} />
+            <Route path="/agent/:agentId" element={<ThreadList />} />
+            <Route path="/thread/:threadId" element={<ThreadDetail />} />
             <Route path="/run/:runId" element={<RunDetail />} />
             <Route path="/run/:runId/review" element={<RiskReview />} />
             <Route path="/run/:runId/cost" element={<CostDashboard />} />

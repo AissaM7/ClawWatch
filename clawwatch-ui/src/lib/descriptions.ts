@@ -96,6 +96,9 @@ export function buildDescription(event: ClawEvent): string {
       return `Agent replied: "${(event.llm_output_full || '').substring(0, 120)}"`;
 
 
+    case 'agent_error':
+      return `⚠ Agent failed (${event.error_type || 'error'}): ${(event.error_message || 'unknown error').substring(0, 200)}`;
+
     default:
       return event.event_type;
   }

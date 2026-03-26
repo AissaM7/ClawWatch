@@ -1,7 +1,7 @@
 // ── ClawWatch Data Types ─────────────────────────────────────────
 
 export type EventType =
-  | 'agent_start' | 'agent_end'
+  | 'agent_start' | 'agent_end' | 'agent_error'
   | 'tool_call_start' | 'tool_call_end' | 'tool_error'
   | 'llm_call_start' | 'llm_call_end' | 'llm_error'
   | 'file_read' | 'file_write' | 'file_delete'
@@ -68,6 +68,11 @@ export interface ClawEvent {
   status?: string;
   tools_list?: string;
   workdir?: string;
+
+  // Hierarchy (Thread/Task/Exchange)
+  thread_id?: string;
+  task_id?: string;
+  exchange_id?: string;
 }
 
 export interface Run {
@@ -129,4 +134,64 @@ export interface EnrichedEvent extends ClawEvent {
   risk: RiskResult;
   goal_alignment: GoalAlignmentResult;
   description: string;
+}
+
+// ── Thread / Task / Exchange hierarchy ───────────────────────────
+
+export interface Agent {
+  agent_id: string;
+  thread_count: number;
+  total_tasks: number;
+  last_active_at: number;
+  total_cost_usd: number;
+}
+
+export interface Thread {
+  thread_id: string;
+  channel: string;
+  agent_id: string;
+  user_id: string;
+  display_name?: string;
+  created_at: number;
+  last_active_at: number;
+  task_count: number;
+  total_cost_usd: number;
+}
+
+export interface Task {
+  task_id: string;
+  thread_id: string;
+  run_id: string;
+  opened_at: number;
+  closed_at: number | null;
+  duration_ms: number | null;
+  status: 'active' | 'completed' | 'abandoned' | 'error';
+  opening_prompt: string;
+  exchange_count: number;
+  llm_call_count: number;
+  tool_call_count: number;
+  error_count: number;
+  total_cost_usd: number;
+  goal_alignment_pct: number | null;
+  highest_risk_score: number | null;
+}
+
+export interface Exchange {
+  exchange_id: string;
+  task_id: string;
+  thread_id: string;
+  run_id: string;
+  exchange_index: number;
+  opened_at: number;
+  closed_at: number | null;
+  duration_ms: number | null;
+  user_message: string;
+  user_message_channel: string;
+  agent_response: string | null;
+  latency_ms: number | null;
+  llm_call_count: number;
+  tool_call_count: number;
+  cost_usd: number;
+  risk_score: number | null;
+  goal_alignment_pct: number | null;
 }

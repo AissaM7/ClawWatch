@@ -1,0 +1,5 @@
+[console_scripts]
+clawwatch = clawwatch.cli:main
+
+[openclaw.plugins]
+clawwatch = clawwatch:ClawWatchPlugin

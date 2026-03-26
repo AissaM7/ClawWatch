@@ -195,14 +195,27 @@ export default {
     // ──────────────────────────────────────────────────────────────
 
     // New session = new run (scoped to sessionKey)
+    //
+    // IMPORTANT: This hook fires TWICE per inbound message — once in the
+    // gateway dispatch context and once in the agent process context.
+    // Using getOrCreateRun() ensures both fires get the SAME run_id,
+    // preventing duplicate run records.
     api.on("command:new", async (event: any) => {
       const sk = event?.sessionKey;
+      const existing = sk ? sessions.get(sk) : undefined;
+      if (existing) {
+        // Session already has a run — this is the second fire (agent process).
+        // Just emit an agent_start under the SAME run_id for event tracking.
+        // No new run is created.
+        return;
+      }
+      // First fire (or no sessionKey) — create a new run
       const run = resetRun(sk);
       send({
         ...baseEvent("agent_start", sk),
         run_id: run.runId,
         agent_name: "openclaw",
-        goal: event?.context?.workspaceDir || "interactive session",
+        goal: "",
         status: "running",
       });
     });
@@ -235,48 +248,33 @@ export default {
       });
     });
 
-    api.on("gateway:startup", async (_event: any) => {
-      const run = resetRun(undefined);
-      send({
-        ...baseEvent("agent_start", undefined),
-        run_id: run.runId,
-        agent_name: "openclaw-gateway",
-        goal: "gateway started",
-        status: "running",
-      });
-    });
+    // gateway:startup — intentionally NOT emitting agent_start.
+    // The gateway is infrastructure, not an agent. Its lifecycle events
+    // should not create agent run records in ClawWatch.
 
+    // message:received — emit user_prompt event with full message text.
+    // Does NOT create a new run — runs are only created by command:new.
     api.on("message:received", async (event: any) => {
       const sk = event?.sessionKey;
       const content = event?.context?.content || event?.content || event?.text || "";
+      const channel = event?.context?.channelId || "unknown";
+      const userId = event?.context?.from || event?.context?.userId || "unknown";
 
-      // Emit a user_prompt event with the ACTUAL user message
       if (content) {
+        // Emit a user_prompt event — this is the primary record of the user's message
         send({
           ...baseEvent("user_prompt", sk),
           prompt_preview: content.slice(0, 2048),
           goal: content.slice(0, 200),
-          tool_name: `message:${event?.context?.channelId || "unknown"}`,
+          tool_name: `user:${channel}`,
           tool_args: JSON.stringify({
+            channel,
+            user_id: userId,
             direction: "inbound",
-            from: event?.context?.from,
-            channel: event?.context?.channelId,
+            full_message: content,
           }),
         });
       }
-
-      // Also log it as a tool_call_start for event tracking
-      send({
-        ...baseEvent("tool_call_start", sk),
-        tool_name: `message:${event?.context?.channelId || "unknown"}`,
-        tool_args: JSON.stringify({
-          direction: "inbound",
-          from: event?.context?.from,
-          channel: event?.context?.channelId,
-          content: content.slice(0, 2048),
-        }),
-        goal: content.slice(0, 200),
-      });
     });
 
     api.on("message:sent", async (event: any) => {
@@ -300,32 +298,20 @@ export default {
     // ──────────────────────────────────────────────────────────────
 
     // Intercept LLM input (prompts sent to provider)
+    // PluginHookLlmInputEvent: { runId, sessionId, provider, model, systemPrompt?, prompt, historyMessages, imagesCount }
     api.on("llm_input", async (event: any) => {
       const sk = event?.sessionKey;
 
       // Extract the user's prompt — event.prompt is the confirmed field
-      const rawPrompt: string =
-        event?.prompt ||
-        event?.userMessage ||
-        event?.content ||
-        event?.text ||
-        "";
-
-      // Also check messages array as fallback
-      const messages: any[] = (
-        event?.messages ||
-        event?.historyMessages ||
-        event?.input?.messages ||
-        []
-      ).filter?.((m: any) => m) || [];
+      const rawPrompt: string = event?.prompt || "";
+      const messages: any[] = event?.historyMessages || [];
 
       let userPrompt = "";
-
       if (rawPrompt) {
         userPrompt = stripOpenClawMetadata(rawPrompt);
       }
 
-      // Fallback: try messages array for last user message
+      // Fallback: try historyMessages for last user message
       if (!userPrompt && messages.length > 0) {
         const lastUserMsg = [...messages]
           .reverse()
@@ -340,52 +326,51 @@ export default {
 
       const preview = userPrompt.slice(0, 2048);
 
-      // Emit a user_prompt event with the cleaned prompt
-      if (preview) {
-        send({
-          ...baseEvent("user_prompt", sk),
-          prompt_preview: preview,
-          goal: preview.slice(0, 200),
-        });
-      }
+      // NOTE: user_prompt is already emitted by message:received — do NOT duplicate here
 
       send({
         ...baseEvent("llm_call_start", sk),
-        model: event?.modelId || event?.model || "",
+        model: event?.model || "",
         prompt_preview: preview,
         tool_name: "llm",
         tool_args: JSON.stringify({
-          model: event?.modelId || event?.model,
-          provider: event?.providerId || event?.provider,
+          model: event?.model,
+          provider: event?.provider,
           message_count: messages.length,
-          system_prompt_length:
-            (event?.systemPrompt || "").length ||
-            messages.find((m: any) => m.role === "system")?.content?.length ||
-            0,
+          system_prompt_length: (event?.systemPrompt || "").length || 0,
+          images_count: event?.imagesCount || 0,
         }),
       });
     });
 
     // Intercept LLM output (completions from provider)
+    // PluginHookLlmOutputEvent: { runId, sessionId, provider, model, assistantTexts: string[], lastAssistant?, usage?: { input, output, cacheRead } }
     api.on("llm_output", async (event: any) => {
       const sk = event?.sessionKey;
-      const content = event?.content || event?.text || "";
-      const outputText =
-        typeof content === "string" ? content : JSON.stringify(content);
+
+      // assistantTexts is the correct field — it's a string array
+      const assistantTexts: string[] = event?.assistantTexts || [];
+      const outputText = assistantTexts.join("\n") || "";
+
+      // Also try lastAssistant as fallback
+      let fullOutput = outputText;
+      if (!fullOutput && event?.lastAssistant) {
+        const la = event.lastAssistant;
+        fullOutput = typeof la === "string" ? la : (la?.content || la?.text || JSON.stringify(la));
+      }
 
       send({
         ...baseEvent("llm_call_end", sk),
-        model: event?.modelId || event?.model || "",
-        llm_output_full: outputText.slice(0, 8192),
-        input_tokens: event?.usage?.inputTokens || event?.usage?.input || 0,
-        output_tokens:
-          event?.usage?.outputTokens || event?.usage?.output || 0,
+        model: event?.model || "",
+        llm_output_full: fullOutput.slice(0, 8192),
+        input_tokens: event?.usage?.input || event?.usage?.inputTokens || 0,
+        output_tokens: event?.usage?.output || event?.usage?.outputTokens || 0,
         tool_name: "llm",
         tool_result: JSON.stringify({
-          model: event?.modelId,
-          provider: event?.providerId,
-          stop_reason: event?.stopReason,
-          output_length: outputText.length,
+          model: event?.model,
+          provider: event?.provider,
+          output_length: fullOutput.length,
+          cache_read: event?.usage?.cacheRead || 0,
         }),
       });
     });
@@ -429,6 +414,197 @@ export default {
             ? event.error
             : event.error.message || String(event.error)
           : undefined,
+      });
+    });
+
+    // Intercept agent_end — fires when agent finishes (success, error, timeout, killed)
+    // PluginHookAgentEndEvent: { messages: unknown[], success: boolean, error?: string, durationMs?: number }
+    // PluginHookAgentContext: { agentId, sessionKey, sessionId, workspaceDir, messageProvider, trigger, channelId }
+    api.on("agent_end", async (event: any, ctx: any) => {
+      const sk = ctx?.sessionKey || event?.sessionKey;
+      const success: boolean = event?.success === true;
+      const errorMsg: string = event?.error || "";
+      const durationMs: number = event?.durationMs || 0;
+      const status = success ? "completed" : (errorMsg ? "error" : "unknown");
+
+      // Always emit agent_end with actual status
+      send({
+        ...baseEvent("agent_end", sk),
+        status,
+        duration_ms: durationMs,
+        error_message: errorMsg || undefined,
+        error_type: !success ? (errorMsg.includes("timed out") ? "timeout" : "error") : undefined,
+      });
+
+      // If the agent FAILED, emit a dedicated agent_error event for prominent UI display
+      if (!success && errorMsg) {
+        send({
+          ...baseEvent("agent_error", sk),
+          error_type: errorMsg.includes("timed out") ? "timeout" : "agent_failure",
+          error_message: errorMsg,
+          duration_ms: durationMs,
+          tool_name: "agent",
+          tool_result: JSON.stringify({
+            success: false,
+            error: errorMsg,
+            agentId: ctx?.agentId,
+            trigger: ctx?.trigger,
+            channel: ctx?.channelId,
+          }),
+        });
+
+        // Also emit as agent_response so the error text appears in the timeline
+        // as what the agent "said" — even if message_sending also fires,
+        // this ensures the error is captured at the agent_end moment
+        send({
+          ...baseEvent("agent_response", sk),
+          llm_output_full: errorMsg.slice(0, 8192),
+          tool_name: `response:${ctx?.channelId || "unknown"}`,
+          tool_result: JSON.stringify({
+            to: ctx?.channelId || "unknown",
+            channel: ctx?.channelId || "unknown",
+            is_error: true,
+          }),
+        });
+      }
+    });
+
+    // Intercept after_tool_call — standard plugin hook with error field
+    // PluginHookAfterToolCallEvent: { toolName, params, runId?, toolCallId?, result?, error?, durationMs? }
+    // PluginHookToolContext: { agentId, sessionKey, sessionId }
+    api.on("after_tool_call", async (event: any, ctx: any) => {
+      const sk = ctx?.sessionKey || event?.sessionKey;
+      const toolName = event?.toolName || "unknown";
+      const error = event?.error;
+      const result = event?.result || "";
+      const resultStr =
+        typeof result === "string" ? result : JSON.stringify(result);
+
+      if (error) {
+        // Emit a tool_error event for failed tool calls
+        const errorMsg =
+          typeof error === "string" ? error : (error.message || String(error));
+        send({
+          ...baseEvent("tool_error", sk),
+          tool_name: toolName,
+          error_type: "tool_error",
+          error_message: errorMsg,
+          call_id: event?.toolCallId || "",
+          duration_ms: event?.durationMs || 0,
+        });
+      }
+      // Note: don't emit tool_call_end here to avoid duplicates with tool_result_received
+    });
+
+    // Intercept subagent_ended — fires when a spawned subagent completes or fails
+    // PluginHookSubagentEndedEvent: { targetSessionKey, targetKind?, reason?, outcome, error?, durationMs?, runId? }
+    api.on("subagent_ended", async (event: any, ctx: any) => {
+      const sk = ctx?.sessionKey || event?.sessionKey;
+      const success: boolean = event?.outcome === "ok" || event?.outcome === "completed";
+      const errorMsg: string = event?.error || "";
+
+      send({
+        ...baseEvent("agent_end", sk),
+        status: success ? "completed" : (errorMsg ? "error" : event?.outcome || "unknown"),
+        error_message: errorMsg || undefined,
+        error_type: !success && errorMsg ? "subagent_error" : undefined,
+        tool_name: "subagent",
+        tool_result: JSON.stringify({
+          targetSessionKey: event?.targetSessionKey,
+          outcome: event?.outcome,
+          error: errorMsg,
+        }),
+      });
+
+      // Emit agent_error for failed subagents
+      if (!success && errorMsg) {
+        send({
+          ...baseEvent("agent_error", sk),
+          error_type: "subagent_error",
+          error_message: errorMsg,
+          tool_name: "subagent",
+        });
+      }
+    });
+
+    // ──────────────────────────────────────────────────────────────
+    // Phase 2b: LLM Error hook — captures timeouts and failures
+    //
+    // OpenClaw's llm_output hook only fires on SUCCESS. When an LLM
+    // call times out or fails, NO llm_output fires. We need a
+    // dedicated error handler.
+    // ──────────────────────────────────────────────────────────────
+    api.on("llm_error", async (event: any, ctx: any) => {
+      const sk = ctx?.sessionKey || event?.sessionKey;
+      const model = event?.model || event?.modelId || "";
+      const provider = event?.provider || event?.providerId || "";
+      const errorMsg = event?.error
+        ? typeof event.error === "string" ? event.error : (event.error.message || String(event.error))
+        : "LLM call failed";
+      const durationMs = event?.durationMs || 0;
+
+      // Determine error type
+      let errorType = "llm_error";
+      if (errorMsg.includes("timed out") || errorMsg.includes("timeout")) {
+        errorType = "timeout";
+      } else if (errorMsg.includes("rate limit")) {
+        errorType = "rate_limit";
+      }
+
+      send({
+        ...baseEvent("llm_error", sk),
+        model,
+        error_type: errorType,
+        error_message: errorMsg,
+        duration_ms: durationMs,
+        tool_name: "llm",
+        tool_result: JSON.stringify({
+          model,
+          provider,
+          error: errorMsg,
+          error_type: errorType,
+        }),
+      });
+    });
+
+    // Intercept message_sending — captures outgoing messages including error responses
+    // PluginHookMessageSendingEvent: { to, content, replyToId?, channelId? }
+    // This is where "Agent failed before reply: All models failed..." gets sent
+    api.on("message_sending", async (event: any, ctx: any) => {
+      const sk = ctx?.sessionKey || event?.sessionKey;
+      const content: string = event?.content || "";
+
+      // Detect error messages (OpenClaw prefixes with ⚠ or "Agent failed")
+      const isErrorMessage = content.includes("Agent failed") ||
+        content.includes("All models failed") ||
+        content.includes("timed out") ||
+        content.startsWith("⚠");
+
+      if (isErrorMessage) {
+        // Emit the ACTUAL error message as an agent_error event
+        send({
+          ...baseEvent("agent_error", sk),
+          error_type: content.includes("timed out") ? "timeout" : "agent_failure",
+          error_message: content,
+          tool_name: "agent",
+          tool_result: JSON.stringify({
+            raw_error_message: content,
+            to: event?.to,
+            channel: ctx?.channelId || event?.channelId,
+          }),
+        });
+      }
+
+      // Emit the agent's response
+      send({
+        ...baseEvent("agent_response", sk),
+        llm_output_full: content.slice(0, 8192),
+        tool_name: `response:${ctx?.channelId || event?.channelId || "unknown"}`,
+        tool_result: JSON.stringify({
+          to: event?.to,
+          channel: ctx?.channelId || event?.channelId,
+          is_error: isErrorMessage,
+        }),
       });
     });
 

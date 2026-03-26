@@ -129,7 +129,7 @@ export default function RunList() {
               <span className={`status-dot ${run.status === 'running' ? 'running' : run.status === 'error' ? 'error' : 'completed'}`} />
               <span className="agent-name">{run.agent_name}</span>
             </div>
-            <div className="run-card-goal">{run.goal || 'No goal specified'}</div>
+            <div className="run-card-goal">{run.goal || 'Awaiting prompt...'}</div>
             <div className="run-card-stats">
               <span>{run.event_count || 0} events</span>
               <span>{formatDuration(run.started_at, run.ended_at)}</span>
