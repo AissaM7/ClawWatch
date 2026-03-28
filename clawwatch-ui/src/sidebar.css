@@ -1,0 +1,268 @@
+/* ── Sidebar Navigation ──────────────────────────────────────────── */
+
+.sidebar {
+    display: flex;
+    flex-direction: column;
+    width: 240px;
+    height: 100vh;
+    background: var(--bg-surface);
+    backdrop-filter: var(--glass-blur);
+    -webkit-backdrop-filter: var(--glass-blur);
+    border-right: 1px solid var(--border);
+    flex-shrink: 0;
+    z-index: 100;
+    transition: width 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+    overflow: hidden;
+}
+
+.sidebar--collapsed {
+    width: 64px;
+}
+
+/* ── Logo ──────────────────────────────────────────────────────── */
+
+.sidebar-logo {
+    height: 64px;
+    display: flex;
+    align-items: center;
+    padding: 0 16px;
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+}
+
+.sidebar-logo a {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    overflow: hidden;
+    white-space: nowrap;
+}
+
+.sidebar-logo-icon {
+    font-size: 22px;
+    flex-shrink: 0;
+    width: 32px;
+    text-align: center;
+}
+
+.sidebar-logo-text {
+    font-family: 'Inter', var(--font-sans);
+    font-weight: 700;
+    font-size: 26px;
+    color: #FFFFFF;
+    letter-spacing: -0.03em;
+    display: flex;
+    align-items: center;
+}
+
+.sidebar-logo-text span {
+    background: linear-gradient(135deg, #3B82F6, #1E3A8A);
+    /* Blue to Navy Blue */
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    font-weight: 700;
+    margin-left: 1px;
+}
+
+/* ── Navigation ────────────────────────────────────────────────── */
+
+.sidebar-nav {
+    flex: 1;
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding: 12px 8px;
+    scrollbar-width: none;
+}
+
+.sidebar-nav::-webkit-scrollbar {
+    display: none;
+}
+
+/* ── Section ───────────────────────────────────────────────────── */
+
+.sidebar-section {
+    margin-bottom: 8px;
+}
+
+.sidebar-section-label {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    color: var(--text-disabled);
+    padding: 8px 12px 6px;
+    white-space: nowrap;
+    overflow: hidden;
+}
+
+.sidebar-section-label--run {
+    color: var(--color-live);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.sidebar-run-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--color-live);
+    animation: pulse-dot 2s infinite;
+    flex-shrink: 0;
+}
+
+.sidebar-section--run {
+    margin-top: 4px;
+    padding-top: 8px;
+    border-top: 1px solid var(--border);
+}
+
+.sidebar-divider {
+    height: 1px;
+    background: var(--border);
+    margin: 8px 12px;
+}
+
+/* ── Nav Item ──────────────────────────────────────────────────── */
+
+.sidebar-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    height: 40px;
+    padding: 0 12px;
+    border-radius: var(--radius-md);
+    color: var(--text-secondary);
+    font-size: 13px;
+    font-weight: 500;
+    text-decoration: none;
+    white-space: nowrap;
+    overflow: hidden;
+    position: relative;
+    transition: all 0.15s ease;
+    cursor: pointer;
+}
+
+.sidebar-item:hover {
+    color: var(--text-primary);
+    background: var(--bg-hover);
+    text-shadow: none;
+}
+
+.sidebar-item--active {
+    color: var(--text-primary);
+    background: rgba(59, 130, 246, 0.1);
+}
+
+.sidebar-item--active::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 8px;
+    bottom: 8px;
+    width: 3px;
+    border-radius: 0 3px 3px 0;
+    background: var(--color-live);
+    box-shadow: 0 0 8px var(--color-live-glow);
+}
+
+.sidebar-item-icon {
+    flex-shrink: 0;
+    opacity: 0.8;
+}
+
+.sidebar-item--active .sidebar-item-icon {
+    opacity: 1;
+    color: var(--color-live);
+}
+
+.sidebar-item-text {
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* ── Collapsed adjustments ─────────────────────────────────────── */
+
+.sidebar--collapsed .sidebar-item {
+    justify-content: center;
+    padding: 0;
+}
+
+.sidebar--collapsed .sidebar-logo {
+    justify-content: center;
+    padding: 0;
+}
+
+.sidebar--collapsed .sidebar-logo a {
+    justify-content: center;
+}
+
+/* ── Footer ────────────────────────────────────────────────────── */
+
+.sidebar-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 12px;
+    border-top: 1px solid var(--border);
+    flex-shrink: 0;
+    gap: 8px;
+}
+
+.sidebar--collapsed .sidebar-footer {
+    flex-direction: column;
+    padding: 8px;
+    gap: 8px;
+}
+
+.sidebar-status {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    overflow: hidden;
+}
+
+.sidebar-status-icon {
+    flex-shrink: 0;
+}
+
+.sidebar-status-icon--online {
+    color: var(--color-safe);
+}
+
+.sidebar-status-icon--offline {
+    color: var(--text-disabled);
+}
+
+.sidebar-status-text {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text-disabled);
+    white-space: nowrap;
+}
+
+.sidebar-status-text--online {
+    color: var(--color-safe);
+}
+
+.sidebar-collapse-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    border: none;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--text-tertiary);
+    cursor: pointer;
+    flex-shrink: 0;
+    transition: all 0.15s ease;
+}
+
+.sidebar-collapse-btn:hover {
+    color: var(--text-primary);
+    background: var(--bg-hover);
+}

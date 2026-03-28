@@ -48,6 +48,12 @@ const SYSTEM_TOOLS = new Set(['preprocess', 'bootstrap', 'env', 'config']);
 /** Channel tool names — llm_call_start events with these tool_names are user prompt boundaries */
 const CHANNEL_TOOLS = new Set(['telegram', 'discord', 'terminal', 'webhook', 'direct', 'slack', 'whatsapp']);
 
+/** Point-in-time event types — their backend duration_ms is cumulative run time, not event span */
+const POINT_EVENT_TYPES = new Set(['agent_start', 'agent_end', 'agent_error', 'user_prompt']);
+function isPointEvent(e: EnrichedEvent): boolean {
+    return POINT_EVENT_TYPES.has(e.event_type);
+}
+
 // ── Status derivation ────────────────────────────────────────────
 
 /**
@@ -576,8 +582,8 @@ export function buildTraceTree(enrichedEvents: EnrichedEvent[]): TraceNode[] {
                 status,
                 depth: depth + 1,
                 startMs: event.run_offset_ms,
-                endMs: event.run_offset_ms + (event.duration_ms || 0),
-                durationMs: event.duration_ms || 0,
+                endMs: event.run_offset_ms,  // point-in-time event
+                durationMs: 0,               // agent_end is instantaneous; backend duration_ms is cumulative run time
                 children: [],
                 events: [event],
                 isCollapsible: false,
@@ -600,6 +606,8 @@ export function buildTraceTree(enrichedEvents: EnrichedEvent[]): TraceNode[] {
         }
 
         // ── Generic leaf event ──
+        const pointEvent = isPointEvent(event);
+        const leafDurationMs = pointEvent ? 0 : (event.duration_ms || 0);
         const leafNode: TraceNode = {
             id: event.event_id,
             type: 'event',
@@ -607,8 +615,8 @@ export function buildTraceTree(enrichedEvents: EnrichedEvent[]): TraceNode[] {
             status: 'neutral',
             depth: depth + 1,
             startMs: event.run_offset_ms,
-            endMs: event.run_offset_ms + (event.duration_ms || 0),
-            durationMs: event.duration_ms || 0,
+            endMs: event.run_offset_ms + leafDurationMs,
+            durationMs: leafDurationMs,
             children: [],
             events: [event],
             isCollapsible: false,

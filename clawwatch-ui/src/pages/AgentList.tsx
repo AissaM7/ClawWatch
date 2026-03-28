@@ -80,22 +80,22 @@ export default function AgentList() {
                 </p>
             </div>
 
-            <div className="run-list">
+            <div className="agent-list">
                 {agents.map(agent => (
                     <div
                         key={agent.agent_id}
-                        className="run-card agent-card"
+                        className="agent-card"
                         onClick={() => navigate(`/agent/${encodeURIComponent(agent.agent_id)}`)}
                     >
-                        <div className="run-card-header">
+                        <div className="agent-card-header">
                             <span className="status-dot running" />
                             <span className="agent-name">{agent.agent_id}</span>
                         </div>
-                        <div className="run-card-goal" style={{ opacity: 0.7 }}>
+                        <div className="agent-card-goal" style={{ opacity: 0.7 }}>
                             {agent.thread_count} thread{agent.thread_count !== 1 ? 's' : ''}{' · '}
                             {agent.total_tasks} task{agent.total_tasks !== 1 ? 's' : ''}
                         </div>
-                        <div className="run-card-stats">
+                        <div className="agent-card-stats">
                             <span>Last active {formatTime(agent.last_active_at)}</span>
                             {agent.total_cost_usd > 0 && (
                                 <span>${agent.total_cost_usd.toFixed(3)}</span>

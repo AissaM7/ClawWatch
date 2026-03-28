@@ -76,7 +76,7 @@ clawwatch ui
 
 ### Verify it's Working
 
-Open `http://127.0.0.1:8765` in your browser. You should see the ClawWatch dashboard with navigation tabs: **Timeline**, **All Runs**, **Agents**, **Risk Review**, and **Cost**.
+Open `http://127.0.0.1:8765` in your browser. You should see the ClawWatch **Agent Dashboard** with a new persistent **Sidebar** navigation to access: **Dashboard**, **Timeline**, **All Runs**, **Agents**, **Risk Review**, and **Cost**.
 
 ---
 
@@ -264,6 +264,14 @@ Every event POSTed to ClawWatch follows this schema:
 
 ## UI Guide
 
+### Agent Dashboard & Navigation (New)
+
+The new **Sidebar** provides a persistent navigation menu across all views. The main **Agent Dashboard** provides a high-level overview of agent performance, recent runs, health metrics, and active swarms, serving as the entry point for observing your AI fleet.
+
+### Data Explorer Views
+
+The **All Runs** and **Agents** pages utilize a new **high-density, searchable vertical list view**, optimized for scanning large volumes of agent logs, displaying statuses, durations, tools used, and thread names at a glance.
+
 ### Timeline View (RunDetail)
 
 The main view. Displays a hierarchical waterfall trace of all agent events:
@@ -430,12 +438,12 @@ cd .. && pip3 install --user -e ./clawwatch-plugin
 
 ### Design System
 
-The UI uses a custom dark-mode glassmorphism design system defined entirely in `src/index.css`:
+The UI uses a custom dark-mode glassmorphism design system defined entirely in `src/index.css`, recently modernized for a more premium professional aesthetic:
 
-- **Color tokens:** `--color-safe`, `--color-critical`, `--color-llm`, `--color-live`, etc.
-- **Typography:** Outfit (sans) + JetBrains Mono (code)
-- **Effects:** `backdrop-filter: blur()`, gradient borders, pulse animations
-- **Component classes:** `.mm-*` (minimap), `.wf-*` (waterfall), `.event-row-*` (trace rows)
+- **Color tokens:** `--color-safe`, `--color-critical`, `--color-llm`, `--color-live`, plus sophisticated navy-to-blue gradient branding.
+- **Typography:** Inter (sans) for a clean tech look + JetBrains Mono (code).
+- **Effects:** `backdrop-filter: blur()`, gradient borders, pulse animations, and high-density layouts for maximum observability.
+- **Component classes:** `.mm-*` (minimap), `.wf-*` (waterfall), `.event-row-*` (trace rows).
 
 ---
 

@@ -22,6 +22,7 @@ export default function RunList() {
   const [runs, setRuns] = useState<Run[]>([]);
   const [connected, setConnected] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [searchQuery, setSearchQuery] = useState('');
   const navigate = useNavigate();
 
   // Check server health
@@ -107,36 +108,59 @@ export default function RunList() {
     );
   }
 
+  const filteredRuns = runs.filter(run =>
+    !searchQuery ||
+    (run.goal && run.goal.toLowerCase().includes(searchQuery.toLowerCase())) ||
+    (run.agent_name && run.agent_name.toLowerCase().includes(searchQuery.toLowerCase()))
+  );
+
   return (
     <div>
-      <div className="page-header">
-        <h1>Agent Runs</h1>
-        <p>
-          {connected && <span className="status-dot running" style={{ marginRight: 6 }} />}
-          {connected ? 'Connected to agent' : 'Offline — viewing historical runs'}
-          {' · '}{runs.length} run{runs.length !== 1 ? 's' : ''}
-        </p>
+      <div className="page-header run-list-header">
+        <div>
+          <h1>Agent Runs</h1>
+          <p>
+            {connected && <span className="status-dot running" style={{ marginRight: 6 }} />}
+            {connected ? 'Connected to agent' : 'Offline — viewing historical runs'}
+            {' · '}{runs.length} run{runs.length !== 1 ? 's' : ''}
+          </p>
+        </div>
+        <div className="run-search-container">
+          <input
+            type="search"
+            className="run-search-input"
+            placeholder="Search runs by prompt..."
+            value={searchQuery}
+            onChange={e => setSearchQuery(e.target.value)}
+          />
+        </div>
       </div>
 
       <div className="run-list">
-        {runs.map(run => (
-          <div
-            key={run.run_id}
-            className="run-card"
-            onClick={() => navigate(`/run/${run.run_id}`)}
-          >
-            <div className="run-card-header">
-              <span className={`status-dot ${run.status === 'running' ? 'running' : run.status === 'error' ? 'error' : 'completed'}`} />
-              <span className="agent-name">{run.agent_name}</span>
+        {filteredRuns.length === 0 ? (
+          <div className="empty-search-state">No runs match your search.</div>
+        ) : (
+          filteredRuns.map(run => (
+            <div
+              key={run.run_id}
+              className="run-row"
+              onClick={() => navigate(`/run/${run.run_id}`)}
+            >
+              <div className="run-row-identity">
+                <span className={`status-dot ${run.status === 'running' ? 'running' : run.status === 'error' ? 'error' : 'completed'}`} />
+                <span className="agent-name">{run.agent_name}</span>
+              </div>
+              <div className="run-row-goal">
+                {run.goal || 'Awaiting prompt...'}
+              </div>
+              <div className="run-row-stats">
+                <span><span className="stat-label">Events</span>{run.event_count || 0}</span>
+                <span><span className="stat-label">Duration</span>{formatDuration(run.started_at, run.ended_at)}</span>
+                <span><span className="stat-label">Time</span>{formatTime(run.started_at)}</span>
+              </div>
             </div>
-            <div className="run-card-goal">{run.goal || 'Awaiting prompt...'}</div>
-            <div className="run-card-stats">
-              <span>{run.event_count || 0} events</span>
-              <span>{formatDuration(run.started_at, run.ended_at)}</span>
-              <span>{formatTime(run.started_at)}</span>
-            </div>
-          </div>
-        ))}
+          ))
+        )}
       </div>
     </div>
   );
