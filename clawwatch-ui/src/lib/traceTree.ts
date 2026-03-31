@@ -232,6 +232,36 @@ function finalizePromptStatus(promptNode: TraceNode): void {
         promptNode.status = hasError ? 'error' : 'timeout';
     }
     // else: stays 'running'
+
+    // If the turn concluded but OpenClaw didn't emit an explicit agent_end
+    // (e.g., in continuous gateway mode), inject a synthetic completion node.
+    if (promptNode.status !== 'running') {
+        const hasCompletionNode = promptNode.children.some(c => c.type === 'agent_status');
+        if (!hasCompletionNode) {
+            const lastChildMs = promptNode.children.length > 0
+                ? promptNode.children[promptNode.children.length - 1].endMs
+                : promptNode.endMs;
+
+            promptNode.children.push({
+                id: `synth-end-${promptNode.id}`,
+                type: 'agent_status',
+                label: promptNode.status === 'success' ? 'Completed' : (promptNode.status === 'timeout' ? 'Timed Out' : 'Failed'),
+                status: promptNode.status,
+                depth: promptNode.depth + 1,
+                startMs: lastChildMs,
+                endMs: lastChildMs,
+                durationMs: 0,
+                children: [],
+                events: [],
+                isCollapsible: false,
+                isSystemGroup: false,
+                hasChildError: false,
+                llmCalls: 0,
+                toolCalls: 0,
+                costUsd: 0,
+            });
+        }
+    }
 }
 
 function computeMetrics(node: TraceNode): void {

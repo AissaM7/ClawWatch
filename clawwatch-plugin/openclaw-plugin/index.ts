@@ -739,14 +739,15 @@ export default {
       }
 
       // ── Semantic: rate_limit_hit ──
-      // Detect rate limit in LLM errors/content
-      if (fullOutput && /rate.?limit|quota.?exceeded|429|too many requests/i.test(fullOutput)) {
+      // Detect rate limit in LLM errors/content.
+      // Must include a numeric error code or explicit quota keyword so we don't trigger when the model just mentions "rate limit" conversationally.
+      if (fullOutput && /(?:429\s*(?:too many requests)?)|(?:quota\s*exceeded)/i.test(fullOutput)) {
         send({
           ...baseEvent("rate_limit_hit", sk),
           model,
           tool_name: "provider",
           error_type: "rate_limit",
-          error_message: fullOutput.slice(0, 500),
+          error_message: "Rate limit metadata detected",
         });
       }
     });
