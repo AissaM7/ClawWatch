@@ -751,6 +751,8 @@ class EventStore:
         idx_conn.execute(f"CREATE TABLE IF NOT EXISTS threads ({', '.join(THREADS_COLS)})")
         idx_conn.execute(f"CREATE TABLE IF NOT EXISTS tasks ({', '.join(TASKS_COLS)})")
 
+        event_type = data.get("event_type", "")
+
         # ── Run consolidation: merge temporally-adjacent runs ─────
         existing = idx_conn.execute(
             "SELECT run_id, merge_group FROM runs WHERE run_id = ?", (run_id,)
@@ -827,8 +829,6 @@ class EventStore:
             "UPDATE runs SET event_count = event_count + 1 WHERE run_id = ?",
             (primary_run_id,),
         )
-
-        event_type = data.get("event_type", "")
 
         # Bug #3: Backfill goal from first user_prompt OR llm_call_start if goal is empty
         if event_type in ("user_prompt", "llm_call_start"):

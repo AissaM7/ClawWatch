@@ -148,10 +148,14 @@ def _make_handler(store_cls: type = EventStore):
             if path == "/api/v1/ingest":
                 length = int(self.headers.get("Content-Length", 0))
                 if length:
-                    body = json.loads(self.rfile.read(length))
-                    store_cls.ingest_event(body)
-                    # Broadcast to SSE clients
-                    broadcaster.broadcast(json.dumps(body, default=str))
+                    try:
+                        body = json.loads(self.rfile.read(length))
+                        store_cls.ingest_event(body)
+                        # Broadcast to SSE clients
+                        broadcaster.broadcast(json.dumps(body, default=str))
+                    except Exception:
+                        import traceback
+                        traceback.print_exc()
                 self._json_response({"ok": True})
                 return
 
