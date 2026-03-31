@@ -217,22 +217,16 @@ export default {
     // Phase 1: Infrastructure — command & message events via hooks
     // ──────────────────────────────────────────────────────────────
 
-    // New session = new run (scoped to sessionKey)
-    //
-    // IMPORTANT: This hook fires TWICE per inbound message — once in the
-    // gateway dispatch context and once in the agent process context.
-    // Using getOrCreateRun() ensures both fires get the SAME run_id,
-    // preventing duplicate run records.
-    api.on("command:new", async (event: any) => {
-      const sk = event?.sessionKey;
+    // before_agent_start — fires when a new agent run begins.
+    // Creates a new run scoped to sessionKey, emits agent_start event.
+    api.on("before_agent_start", async (event: any, ctx: any) => {
+      const sk = ctx?.sessionKey || event?.sessionKey;
       const existing = sk ? sessions.get(sk) : undefined;
       if (existing) {
-        // Session already has a run — this is the second fire (agent process).
-        // Just emit an agent_start under the SAME run_id for event tracking.
-        // No new run is created.
+        // Session already has a run — skip duplicate creation.
         return;
       }
-      // First fire (or no sessionKey) — create a new run
+      // Create a new run for this session
       const run = resetRun(sk);
       send({
         ...baseEvent("agent_start", sk),
@@ -243,20 +237,10 @@ export default {
       });
     });
 
-    api.on("command:stop", async (event: any) => {
-      const sk = event?.sessionKey;
-      send({
-        ...baseEvent("agent_end", sk),
-        status: "completed",
-      });
-      // NOTE: Do NOT delete the session here. The agent_end hook may fire
-      // after this, and it needs the session to resolve the correct run_id.
-      // Session cleanup happens in the agent_end handler or via TTL eviction.
-    });
-
-    api.on("command:reset", async (event: any) => {
-      const sk = event?.sessionKey;
-      // End the current run
+    // before_reset — fires when session is being reset.
+    // End current run, start a fresh one.
+    api.on("before_reset", async (event: any, ctx: any) => {
+      const sk = ctx?.sessionKey || event?.sessionKey;
       send({
         ...baseEvent("agent_end", sk),
         status: "reset",
@@ -276,13 +260,13 @@ export default {
     // The gateway is infrastructure, not an agent. Its lifecycle events
     // should not create agent run records in ClawWatch.
 
-    // message:received — emit user_prompt event with full message text.
-    // Does NOT create a new run — runs are only created by command:new.
-    api.on("message:received", async (event: any) => {
-      const sk = event?.sessionKey;
-      const content = event?.context?.content || event?.content || event?.text || "";
-      const channel = event?.context?.channelId || "unknown";
-      const userId = event?.context?.from || event?.context?.userId || "unknown";
+    // message_received — emit user_prompt event with full message text.
+    // Does NOT create a new run — runs are only created by before_agent_start.
+    api.on("message_received", async (event: any, ctx: any) => {
+      const sk = ctx?.sessionKey || event?.sessionKey;
+      const content = event?.content || event?.text || "";
+      const channel = ctx?.channelId || event?.channelId || "unknown";
+      const userId = event?.from || event?.userId || "unknown";
 
       if (content) {
         // Emit a user_prompt event — this is the primary record of the user's message
@@ -301,17 +285,18 @@ export default {
       }
     });
 
-    api.on("message:sent", async (event: any) => {
-      const sk = event?.sessionKey;
-      const content = event?.context?.content || "";
+    // message_sent — captures messages after they are delivered to the channel.
+    api.on("message_sent", async (event: any, ctx: any) => {
+      const sk = ctx?.sessionKey || event?.sessionKey;
+      const content = event?.content || "";
       send({
         ...baseEvent("tool_call_end", sk),
-        tool_name: `message:${event?.context?.channelId || "unknown"}`,
+        tool_name: `message:${ctx?.channelId || event?.channelId || "unknown"}`,
         tool_result: JSON.stringify({
           direction: "outbound",
-          to: event?.context?.to,
-          channel: event?.context?.channelId,
-          success: event?.context?.success,
+          to: event?.to,
+          channel: ctx?.channelId || event?.channelId,
+          success: event?.success !== false,
           content: content.slice(0, 4096),
         }),
       });
@@ -418,28 +403,9 @@ export default {
       return undefined;
     });
 
-    // Intercept tool results AFTER execution
-    api.on("tool_result_received", async (event: any) => {
-      const sk = event?.sessionKey;
-      const toolName = event?.name || event?.toolName || "unknown";
-      const result = event?.result || event?.output || "";
-      const resultStr =
-        typeof result === "string" ? result : JSON.stringify(result);
-
-      send({
-        ...baseEvent("tool_call_end", sk),
-        tool_name: toolName,
-        tool_result: resultStr.slice(0, 4096),
-        call_id: event?.callId || event?.tool_use_id || "",
-        duration_ms: event?.durationMs || event?.duration || 0,
-        error_type: event?.error ? "tool_error" : undefined,
-        error_message: event?.error
-          ? typeof event.error === "string"
-            ? event.error
-            : event.error.message || String(event.error)
-          : undefined,
-      });
-    });
+    // NOTE: tool_result_received was invalid — tool results are captured
+    // by after_tool_call below. The after_tool_call handler emits both
+    // tool_call_end (with result) and tool_error events.
 
     // Intercept agent_end — fires when agent finishes (success, error, timeout, killed)
     // PluginHookAgentEndEvent: { messages: unknown[], success: boolean, error?: string, durationMs?: number }
@@ -447,15 +413,14 @@ export default {
     api.on("agent_end", async (event: any, ctx: any) => {
       const sk = ctx?.sessionKey || event?.sessionKey;
 
-      // CRITICAL: Use existing session only — never create a new run for agent_end.
-      // If command:stop already emitted agent_end and this is a duplicate fire,
-      // the session will still exist (we no longer delete in command:stop).
-      // If somehow the session is gone, skip to avoid creating orphan runs.
-      const run = sk ? sessions.get(sk) : null;
+      // Try to use existing session; if none exists, use getOrCreateRun
+      // so the event still gets recorded (before_agent_start may not have
+      // fired with a sessionKey if the agent was started differently)
+      let run = sk ? sessions.get(sk) : null;
       if (!run) {
-        // Session already gone — either already handled or no session.
-        // Skip to prevent creating an orphan run.
-        return;
+        // No existing session — use getOrCreateRun as fallback so agent_end
+        // is ALWAYS recorded, even if we need to create a run for it
+        run = getOrCreateRun(sk);
       }
 
       const success: boolean = event?.success === true;
@@ -490,8 +455,6 @@ export default {
         });
 
         // Also emit as agent_response so the error text appears in the timeline
-        // as what the agent "said" — even if message_sending also fires,
-        // this ensures the error is captured at the agent_end moment
         send({
           ...baseEventFromRun("agent_response", run),
           llm_output_full: errorMsg.slice(0, 8192),
@@ -504,11 +467,12 @@ export default {
         });
       }
 
-      // NOW safe to clean up the session — all events have been emitted
+      // Clean up the session — all events have been emitted
       if (sk) sessions.delete(sk);
     });
 
-    // Intercept after_tool_call — standard plugin hook with error field
+    // Intercept after_tool_call — captures tool results AND errors.
+    // This is the primary handler for tool completion events.
     // PluginHookAfterToolCallEvent: { toolName, params, runId?, toolCallId?, result?, error?, durationMs? }
     // PluginHookToolContext: { agentId, sessionKey, sessionId }
     api.on("after_tool_call", async (event: any, ctx: any) => {
@@ -519,8 +483,23 @@ export default {
       const resultStr =
         typeof result === "string" ? result : JSON.stringify(result);
 
+      // Always emit tool_call_end with the result
+      send({
+        ...baseEvent("tool_call_end", sk),
+        tool_name: toolName,
+        tool_result: resultStr.slice(0, 4096),
+        call_id: event?.toolCallId || "",
+        duration_ms: event?.durationMs || 0,
+        error_type: error ? "tool_error" : undefined,
+        error_message: error
+          ? typeof error === "string"
+            ? error
+            : error.message || String(error)
+          : undefined,
+      });
+
+      // Additionally emit a dedicated tool_error for failed tool calls
       if (error) {
-        // Emit a tool_error event for failed tool calls
         const errorMsg =
           typeof error === "string" ? error : (error.message || String(error));
         send({
@@ -532,7 +511,6 @@ export default {
           duration_ms: event?.durationMs || 0,
         });
       }
-      // Note: don't emit tool_call_end here to avoid duplicates with tool_result_received
     });
 
     // Intercept subagent_ended — fires when a spawned subagent completes or fails
@@ -571,45 +549,10 @@ export default {
       }
     });
 
-    // ──────────────────────────────────────────────────────────────
-    // Phase 2b: LLM Error hook — captures timeouts and failures
-    //
-    // OpenClaw's llm_output hook only fires on SUCCESS. When an LLM
-    // call times out or fails, NO llm_output fires. We need a
-    // dedicated error handler.
-    // ──────────────────────────────────────────────────────────────
-    api.on("llm_error", async (event: any, ctx: any) => {
-      const sk = ctx?.sessionKey || event?.sessionKey;
-      const model = event?.model || event?.modelId || "";
-      const provider = event?.provider || event?.providerId || "";
-      const errorMsg = event?.error
-        ? typeof event.error === "string" ? event.error : (event.error.message || String(event.error))
-        : "LLM call failed";
-      const durationMs = event?.durationMs || 0;
-
-      // Determine error type
-      let errorType = "llm_error";
-      if (errorMsg.includes("timed out") || errorMsg.includes("timeout")) {
-        errorType = "timeout";
-      } else if (errorMsg.includes("rate limit")) {
-        errorType = "rate_limit";
-      }
-
-      send({
-        ...baseEvent("llm_error", sk),
-        model,
-        error_type: errorType,
-        error_message: errorMsg,
-        duration_ms: durationMs,
-        tool_name: "llm",
-        tool_result: JSON.stringify({
-          model,
-          provider,
-          error: errorMsg,
-          error_type: errorType,
-        }),
-      });
-    });
+    // NOTE: "llm_error" is not a valid OpenClaw plugin hook name.
+    // LLM errors are captured via llm_output (which fires on both success
+    // and failure in newer OpenClaw versions) and after_tool_call for
+    // tool-level errors.
 
     // Intercept message_sending — captures outgoing messages including error responses
     // PluginHookMessageSendingEvent: { to, content, replyToId?, channelId? }
@@ -656,8 +599,9 @@ export default {
     // Phase 3: Session events
     // ──────────────────────────────────────────────────────────────
 
-    api.on("session:compact:before", async (event: any) => {
-      const sk = event?.sessionKey;
+    // before_compaction — session is about to be compacted
+    api.on("before_compaction", async (event: any, ctx: any) => {
+      const sk = ctx?.sessionKey || event?.sessionKey;
       send({
         ...baseEvent("tool_call_start", sk),
         tool_name: "session:compaction",
@@ -665,14 +609,15 @@ export default {
       });
     });
 
-    api.on("session:compact:after", async (event: any) => {
-      const sk = event?.sessionKey;
+    // after_compaction — session compaction completed
+    api.on("after_compaction", async (event: any, ctx: any) => {
+      const sk = ctx?.sessionKey || event?.sessionKey;
       send({
         ...baseEvent("tool_call_end", sk),
         tool_name: "session:compaction",
         tool_result: JSON.stringify({
           phase: "after",
-          summary: event?.context?.summary?.slice?.(0, 1000) || "",
+          summary: event?.summary?.slice?.(0, 1000) || "",
         }),
       });
     });
