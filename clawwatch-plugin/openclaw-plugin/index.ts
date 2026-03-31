@@ -623,6 +623,156 @@ export default {
     });
 
     // ──────────────────────────────────────────────────────────────
+    // Phase 3b: Session lifecycle events
+    // ──────────────────────────────────────────────────────────────
+
+    // session_start — fires when a new session begins
+    api.on("session_start", async (event: any, ctx: any) => {
+      const sk = ctx?.sessionKey || event?.sessionKey;
+      send({
+        ...baseEvent("session_start", sk),
+        tool_name: "session",
+        tool_args: JSON.stringify({
+          sessionId: ctx?.sessionId || event?.sessionId,
+          trigger: ctx?.trigger || event?.trigger,
+          channelId: ctx?.channelId || event?.channelId,
+        }),
+      });
+    });
+
+    // session_end — fires when a session ends
+    api.on("session_end", async (event: any, ctx: any) => {
+      const sk = ctx?.sessionKey || event?.sessionKey;
+      send({
+        ...baseEvent("session_end", sk),
+        tool_name: "session",
+        tool_result: JSON.stringify({
+          sessionId: ctx?.sessionId || event?.sessionId,
+          reason: event?.reason || "normal",
+        }),
+      });
+    });
+
+    // ──────────────────────────────────────────────────────────────
+    // Phase 3c: Subagent spawning events
+    // ──────────────────────────────────────────────────────────────
+
+    // subagent_spawning — fires when a subagent is about to be spawned
+    api.on("subagent_spawning", async (event: any, ctx: any) => {
+      const sk = ctx?.sessionKey || event?.sessionKey;
+      send({
+        ...baseEvent("tool_call_start", sk),
+        tool_name: "subagent:spawn",
+        tool_args: JSON.stringify({
+          targetKind: event?.targetKind,
+          targetSessionKey: event?.targetSessionKey,
+          agentId: ctx?.agentId,
+        }),
+      });
+    });
+
+    // subagent_spawned — fires after subagent has been spawned
+    api.on("subagent_spawned", async (event: any, ctx: any) => {
+      const sk = ctx?.sessionKey || event?.sessionKey;
+      send({
+        ...baseEvent("tool_call_end", sk),
+        tool_name: "subagent:spawn",
+        tool_result: JSON.stringify({
+          targetSessionKey: event?.targetSessionKey,
+          targetKind: event?.targetKind,
+          success: true,
+        }),
+      });
+    });
+
+    // ──────────────────────────────────────────────────────────────
+    // Phase 3d: Model resolution, message write, tool result persist
+    // ──────────────────────────────────────────────────────────────
+
+    // before_model_resolve — fires before model provider is selected
+    // Captures which model/provider the agent is about to use
+    api.on("before_model_resolve", (event: any, ctx: any) => {
+      const sk = ctx?.sessionKey || event?.sessionKey;
+      send({
+        ...baseEvent("model_resolve", sk),
+        model: event?.model || event?.modelId || "",
+        tool_name: "model:resolve",
+        tool_args: JSON.stringify({
+          requestedModel: event?.model || event?.modelId,
+          requestedProvider: event?.provider || event?.providerId,
+          taskType: event?.taskType,
+        }),
+      });
+      // Return undefined — we observe only, don't override model selection
+      return undefined;
+    });
+
+    // tool_result_persist — fires when a tool result is being written to the session transcript
+    // This is SYNCHRONOUS — must not return a Promise
+    api.on("tool_result_persist", (event: any, ctx: any) => {
+      const sk = ctx?.sessionKey || event?.sessionKey;
+      const message = event?.message;
+      if (!message) return;
+
+      // Extract tool result info from the message
+      const toolName = message?.tool_use_id || message?.name || "unknown";
+      const content = typeof message?.content === "string"
+        ? message.content
+        : JSON.stringify(message?.content || "");
+
+      send({
+        ...baseEvent("tool_result_persist", sk),
+        tool_name: toolName,
+        tool_result: content.slice(0, 4096),
+        tool_args: JSON.stringify({
+          role: message?.role,
+          tool_use_id: message?.tool_use_id,
+        }),
+      });
+      // Return the message unmodified
+      return message;
+    });
+
+    // before_message_write — fires when a message is about to be written to session transcript
+    // This captures the agent composing its response — the "writing" moment
+    // This is SYNCHRONOUS — must not return a Promise
+    api.on("before_message_write", (event: any, ctx: any) => {
+      const sk = ctx?.sessionKey || event?.sessionKey;
+      const message = event?.message;
+      if (!message) return;
+
+      const role: string = message?.role || "unknown";
+      let content = "";
+      if (typeof message?.content === "string") {
+        content = message.content;
+      } else if (Array.isArray(message?.content)) {
+        // Content blocks — extract text blocks
+        content = message.content
+          .filter((b: any) => b?.type === "text")
+          .map((b: any) => b?.text || "")
+          .join("\n");
+      }
+
+      // Only emit for assistant messages (agent writing its response)
+      if (role === "assistant" && content) {
+        send({
+          ...baseEvent("agent_response", sk),
+          llm_output_full: content.slice(0, 8192),
+          tool_name: `message_write:${role}`,
+          tool_result: JSON.stringify({
+            role,
+            content_length: content.length,
+            has_tool_use: Array.isArray(message?.content) &&
+              message.content.some((b: any) => b?.type === "tool_use"),
+          }),
+        });
+      }
+
+      // Return the message unmodified
+      return message;
+    });
+
+    // ──────────────────────────────────────────────────────────────
     // Phase 4: Diagnostic events — token usage & cost
     //
     // model.usage events include a sessionKey. We use it to map
