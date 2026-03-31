@@ -178,22 +178,52 @@ function compressChildren(children: TraceNode[]): {
             continue;
         }
 
-        // Tool calls
+        // Tool calls — compress consecutive same-tool calls into one node
         if (kind === 'tool_call') {
+            const toolName = child.event?.tool_name || child.label;
+            let count = 1;
+            let lastToolNode = child;
+
+            // Merge consecutive tool_call children with the same tool name
+            while (i + count < children.length) {
+                const next = children[i + count];
+                if (next.type === 'system_group') { count++; continue; }
+                // Also skip over 'event' type nodes (semantic leaf events)
+                if (next.type === 'event') { count++; continue; }
+                if (next.type === 'tool_call') {
+                    const nextToolName = next.event?.tool_name || next.label;
+                    if (nextToolName === toolName) {
+                        if (next.status === 'success') successCount++;
+                        if (next.status === 'error') errorCount++;
+                        if (next.status === 'timeout') timeoutCount++;
+                        lastToolNode = next;
+                        count++;
+                        continue;
+                    }
+                }
+                break;
+            }
+
+            const toolCount = children.slice(i, i + count).filter(n => n.type === 'tool_call').length;
+
             nodes.push({
                 id: `minimap-${child.id}`,
                 kind,
-                label: child.event?.tool_name || child.label,
-                snippet: nodeSnippet(child),
-                status: child.status,
-                count: 1,
+                label: toolCount > 1
+                    ? `${toolName} ×${toolCount}`
+                    : toolName,
+                snippet: toolCount > 1
+                    ? `${toolCount} calls · ${nodeSnippet(lastToolNode)}`
+                    : nodeSnippet(child),
+                status: lastToolNode.status,
+                count: toolCount,
                 startMs: child.startMs,
-                durationMs: child.durationMs,
-                durationText: formatTraceDuration(child.durationMs),
+                durationMs: lastToolNode.endMs - child.startMs,
+                durationText: formatTraceDuration(lastToolNode.endMs - child.startMs),
                 traceNodeId: child.id,
                 toolName: child.event?.tool_name,
             });
-            i++;
+            i += count;
             continue;
         }
 
@@ -215,6 +245,7 @@ function compressChildren(children: TraceNode[]): {
             continue;
         }
 
+        // Skip semantic leaf events (they're noise in the minimap)
         i++;
     }
 

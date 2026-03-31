@@ -319,6 +319,55 @@ export function buildTraceTree(enrichedEvents: EnrichedEvent[]): TraceNode[] {
 
     // Track whether we've seen an agent_end (to detect new turns on agent_start)
     let lastEventWasAgentEnd = false;
+    // Track the last user_prompt text so we can deduplicate the
+    // llm_call_start with channel that carries the same prompt
+    let lastUserPromptText = '';
+    // Buffer for agent_end events — defer until after message lifecycle events
+    let pendingAgentEnd: EnrichedEvent | null = null;
+    let pendingAgentEndIndex = -1;
+
+    const flushPendingAgentEnd = () => {
+        if (!pendingAgentEnd) return;
+        const event = pendingAgentEnd;
+        const idx = pendingAgentEndIndex;
+        pendingAgentEnd = null;
+        pendingAgentEndIndex = -1;
+        const tgt = getTargetChildren();
+        const d = getDepth();
+
+        const status = deriveAgentEndStatus(event, enrichedEvents, idx);
+        const statusLabel = status === 'timeout' ? 'LLM Timeout'
+            : status === 'error' ? 'Execution Failed'
+                : status === 'success' ? 'Completed'
+                    : status === 'halt' ? 'System Halt'
+                        : 'Agent Finished';
+
+        const agentNode: TraceNode = {
+            id: event.event_id,
+            type: 'agent_status',
+            label: statusLabel,
+            status,
+            depth: d + 1,
+            startMs: event.run_offset_ms,
+            endMs: event.run_offset_ms,
+            durationMs: 0,
+            children: [],
+            events: [event],
+            isCollapsible: false,
+            isSystemGroup: false,
+            hasChildError: status === 'error' || status === 'timeout',
+            llmCalls: 0,
+            toolCalls: 0,
+            costUsd: 0,
+            event,
+        };
+        tgt.push(agentNode);
+
+        if (currentPromptNode) {
+            currentPromptNode.events.push(event);
+            currentPromptNode.endMs = Math.max(currentPromptNode.endMs, event.run_offset_ms);
+        }
+    };
 
     for (let i = 0; i < enrichedEvents.length; i++) {
         const event = enrichedEvents[i];
@@ -327,6 +376,8 @@ export function buildTraceTree(enrichedEvents: EnrichedEvent[]): TraceNode[] {
 
         // ── user_prompt → new conversation turn ──
         if (event.event_type === 'user_prompt') {
+            // Flush any pending agent_end before starting new turn
+            flushPendingAgentEnd();
             // Finalize previous prompt before creating new one
             if (currentPromptNode) finalizePromptStatus(currentPromptNode);
             // Flush any pending system buffer
@@ -334,6 +385,7 @@ export function buildTraceTree(enrichedEvents: EnrichedEvent[]): TraceNode[] {
             llmAttemptCounter = 0;
 
             const promptText = event.prompt_preview || event.goal || 'User prompt';
+            lastUserPromptText = promptText;
             currentPromptNode = {
                 id: `prompt-${event.event_id}`,
                 type: 'prompt',
@@ -401,12 +453,21 @@ export function buildTraceTree(enrichedEvents: EnrichedEvent[]): TraceNode[] {
             event.tool_name && CHANNEL_TOOLS.has(event.tool_name.toLowerCase())) {
             const promptText = event.prompt_preview || event.goal || 'User prompt';
 
+            // If a user_prompt already created a turn with the same text, skip this one
+            // (this deduplicates the user_prompt + llm_call_start:channel pair)
+            if (currentPromptNode && promptText === lastUserPromptText) {
+                // Already have this prompt — skip the duplicate
+                continue;
+            }
+
             // Only create a new turn if the prompt text differs from the current turn
             // (or if there's no current turn yet)
             if (!currentPromptNode || promptText !== currentPromptNode.label) {
+                flushPendingAgentEnd();
                 if (currentPromptNode) finalizePromptStatus(currentPromptNode);
                 flushSystemBuffer(getTargetChildren(), getDepth());
                 llmAttemptCounter = 0;
+                lastUserPromptText = promptText;
 
                 currentPromptNode = {
                     id: `prompt-${event.event_id}`,
@@ -566,43 +627,28 @@ export function buildTraceTree(enrichedEvents: EnrichedEvent[]): TraceNode[] {
             continue;
         }
 
-        // ── agent_end → semantic status ──
+        // ── agent_end → buffer it (flush after message lifecycle events) ──
         if (event.event_type === 'agent_end') {
-            const status = deriveAgentEndStatus(event, enrichedEvents, i);
-            const statusLabel = status === 'timeout' ? 'LLM Timeout'
-                : status === 'error' ? 'Execution Failed'
-                    : status === 'success' ? 'Completed'
-                        : status === 'halt' ? 'System Halt'
-                            : 'Agent Finished';
-
-            const agentNode: TraceNode = {
-                id: event.event_id,
-                type: 'agent_status',
-                label: statusLabel,
-                status,
-                depth: depth + 1,
-                startMs: event.run_offset_ms,
-                endMs: event.run_offset_ms,  // point-in-time event
-                durationMs: 0,               // agent_end is instantaneous; backend duration_ms is cumulative run time
-                children: [],
-                events: [event],
-                isCollapsible: false,
-                isSystemGroup: false,
-                hasChildError: status === 'error' || status === 'timeout',
-                llmCalls: 0,
-                toolCalls: 0,
-                costUsd: 0,
-                event,
-            };
-            targetChildren.push(agentNode);
-
-            if (currentPromptNode) {
-                currentPromptNode.events.push(event);
-                currentPromptNode.endMs = Math.max(currentPromptNode.endMs, event.run_offset_ms);
-                // Don't set prompt status here — it will be finalized by
-                // finalizePromptStatus() at the next turn boundary or end of events
-            }
+            // Buffer agent_end so it appears AFTER any message_draft / message_delivered
+            // events that fire after the agent framework marks the turn complete.
+            pendingAgentEnd = event;
+            pendingAgentEndIndex = i;
+            lastEventWasAgentEnd = true;
             continue;
+        }
+
+        // If we have a pending agent_end and the current event is NOT part of
+        // the message delivery lifecycle, flush the agent_end now.
+        const MESSAGE_LIFECYCLE = new Set([
+            'message_draft', 'message_delivered', 'message_failed',
+            'channel_switch', 'agent_response', 'decision_point',
+            'rate_limit_hit', 'tool_result_persist',
+        ]);
+        if (pendingAgentEnd && event.event_type !== 'tool_call_end'
+            && !MESSAGE_LIFECYCLE.has(event.event_type)
+            && event.event_type !== 'llm_call_end'
+            && event.event_type !== 'llm_error') {
+            flushPendingAgentEnd();
         }
 
         // ── Generic leaf event ──
@@ -637,6 +683,9 @@ export function buildTraceTree(enrichedEvents: EnrichedEvent[]): TraceNode[] {
 
     // Flush remaining system buffer
     flushSystemBuffer(getTargetChildren(), getDepth());
+
+    // Flush any pending agent_end
+    flushPendingAgentEnd();
 
     // Finalize the last prompt node's status
     if (currentPromptNode) finalizePromptStatus(currentPromptNode);
