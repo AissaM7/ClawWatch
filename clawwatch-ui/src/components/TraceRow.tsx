@@ -161,6 +161,20 @@ function getSemanticIcon(eventType: string | undefined, props: { size: number; s
         case 'tool_result_persist':
             return <Database {...props} className="trace-icon trace-icon--system" />;
 
+        // Raw lifecycle events (when shown as flat events)
+        case 'tool_call_start':
+        case 'tool_call_end':
+            return <Wrench {...props} className="trace-icon trace-icon--tool" />;
+        case 'tool_error':
+            return <AlertCircle {...props} className="trace-icon trace-icon--error" />;
+        case 'llm_call_start':
+        case 'llm_call_end':
+            return <Cpu {...props} className="trace-icon trace-icon--llm" />;
+        case 'llm_error':
+            return <AlertCircle {...props} className="trace-icon trace-icon--error" />;
+        case 'agent_error':
+            return <AlertCircle {...props} className="trace-icon trace-icon--error" />;
+
         // Existing events
         case 'user_prompt':
             return <Terminal {...props} className="trace-icon trace-icon--prompt" />;
