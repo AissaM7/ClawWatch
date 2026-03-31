@@ -207,6 +207,190 @@ function cleanupStaleSessions(): void {
 // Run cleanup every 30 minutes
 setInterval(cleanupStaleSessions, 30 * 60 * 1000).unref?.();
 
+// ─── Semantic Event Classification ──────────────────────────────────
+
+/**
+ * Maps an OpenClaw tool name to zero or more semantic event types.
+ * These are emitted IN ADDITION TO the standard tool_call_start/end events.
+ * Only returns types when there's a confident match — no guessing.
+ */
+function classifyToolStart(toolName: string, args: any): string | null {
+  const name = toolName.toLowerCase();
+
+  // File I/O
+  if (name === "read" || name === "readfile" || name === "cat")
+    return "file_read";
+  if (name === "write" || name === "writefile" || name === "edit" || name === "multiedit" || name === "patch")
+    return "file_write";
+
+  // Code execution
+  if (name === "exec" || name === "bash" || name === "shell" || name === "execute_command" || name === "python" || name === "run")
+    return "code_executed";
+
+  // Web browsing
+  if (name === "web_fetch" || name === "browse" || name === "navigate" || name === "scrape")
+    return "browser_navigate";
+  // Screenshot capture
+  if (name === "screenshot" || name === "capture" || name === "screen_capture")
+    return "browser_screenshot";
+
+  // Knowledge retrieval (web search, RAG)
+  if (name === "web_search" || name === "search" || name === "rag" || name === "vector_search")
+    return "knowledge_retrieval";
+
+  // Memory operations
+  if (name === "memory_get" || name === "memory_search" || name === "memory_recall" || name === "remember_get")
+    return "memory_read";
+  if (name === "memory_set" || name === "memory_save" || name === "memory_write" || name === "remember_set")
+    return "memory_write";
+
+  // Multi-agent: delegation
+  if (name === "sessions_spawn" || name === "subagent_spawn" || name === "spawn_agent" || name === "delegate")
+    return "subagent_delegated";
+
+  // Multi-agent: collaboration (messaging between agents)
+  if (name === "sessions_send" || name === "sessions_yield" || name === "agent_send")
+    return "agent_collaboration";
+
+  // Multi-agent: queries about other agents
+  if (name === "sessions_list" || name === "sessions_history" || name === "session_status" || name === "subagents")
+    return "agent_collaboration";
+
+  // External API calls (generic HTTP tools)
+  if (name === "http" || name === "api_call" || name === "fetch" || name === "request" || name === "curl")
+    return "api_call";
+
+  return null;
+}
+
+/**
+ * Classify a tool call END to detect result-level semantic events.
+ */
+function classifyToolEnd(
+  toolName: string,
+  error: any,
+  durationMs: number
+): string[] {
+  const events: string[] = [];
+  const name = toolName.toLowerCase();
+
+  // Subagent result received
+  if (name === "sessions_spawn" || name === "subagent_spawn" || name === "delegate")
+    events.push("subagent_result_received");
+
+  // Latency warning: tool took > 15 seconds
+  if (durationMs > 15000)
+    events.push("latency_warning");
+
+  // Content filtering: detect safety blocks in results
+  if (error) {
+    const errStr = typeof error === "string" ? error : (error.message || String(error));
+    if (/content.?filter|safety|blocked|harmful|moderation/i.test(errStr))
+      events.push("content_filtered");
+    if (/permission|unauthorized|forbidden|access denied/i.test(errStr))
+      events.push("permission_escalation");
+    if (/blocked.*policy|policy.*block|tool.*blocked/i.test(errStr))
+      events.push("tool_blocked");
+  }
+
+  return events;
+}
+
+/**
+ * Analyze LLM output text for reasoning patterns.
+ * Returns semantic events to emit based on content analysis.
+ * Uses strict pattern matching to avoid false positives.
+ */
+function analyzeLlmOutput(text: string): Array<{ type: string; detail: string }> {
+  const events: Array<{ type: string; detail: string }> = [];
+  if (!text || text.length < 10) return events;
+
+  // Detect <thinking> blocks (explicit chain-of-thought)
+  const thinkingMatch = text.match(/<thinking>([\s\S]*?)<\/thinking>/i);
+  if (thinkingMatch) {
+    events.push({
+      type: "thinking",
+      detail: thinkingMatch[1].trim().slice(0, 2048),
+    });
+  }
+
+  // Detect numbered plan/step lists (3+ numbered steps)
+  // Pattern: lines starting with "1.", "2.", "3." etc.
+  const planLines = text.match(/^\s*\d+\.\s+.+$/gm);
+  if (planLines && planLines.length >= 3) {
+    events.push({
+      type: "plan_created",
+      detail: planLines.map(l => l.trim()).join("\n").slice(0, 2048),
+    });
+  }
+
+  // Detect explicit decision statements
+  // Only match clear decision language to avoid false positives
+  const decisionPatterns = [
+    /\bI(?:'ll| will) (?:use|try|choose|go with|switch to|opt for)\b/i,
+    /\bInstead of .+, I(?:'ll| will)\b/i,
+    /\bI (?:decided|chose) to\b/i,
+    /\bLet me (?:try|use|switch to)\b/i,
+  ];
+  for (const pattern of decisionPatterns) {
+    const match = text.match(pattern);
+    if (match) {
+      // Extract the sentence containing the decision
+      const sentenceStart = Math.max(0, text.lastIndexOf(".", match.index! - 1) + 1);
+      const sentenceEnd = text.indexOf(".", match.index! + match[0].length);
+      const sentence = text.slice(sentenceStart, sentenceEnd > 0 ? sentenceEnd + 1 : sentenceStart + 200).trim();
+      events.push({
+        type: "decision_point",
+        detail: sentence.slice(0, 500),
+      });
+      break; // Only report first decision per output
+    }
+  }
+
+  return events;
+}
+
+/**
+ * Simple PII pattern detection.
+ * Returns detected PII types (not the actual PII values — we don't store them).
+ */
+function detectPII(text: string): string[] {
+  if (!text || text.length < 5) return [];
+  const found: string[] = [];
+
+  // Email addresses
+  if (/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/.test(text))
+    found.push("email");
+
+  // US Phone numbers (various formats)
+  if (/(?:\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}/.test(text))
+    found.push("phone");
+
+  // SSN patterns
+  if (/\b\d{3}[-.]?\d{2}[-.]?\d{4}\b/.test(text))
+    found.push("ssn");
+
+  // Credit card patterns (basic)
+  if (/\b(?:\d{4}[-.\s]?){3}\d{4}\b/.test(text))
+    found.push("credit_card");
+
+  return found;
+}
+
+// ─── Performance Tracking State ─────────────────────────────────────
+
+/** Track last model used per session for fallback detection */
+const lastModelPerSession = new Map<string, string>();
+
+/** Track last tool + args per session for retry detection */
+const lastToolCallPerSession = new Map<string, { tool: string; args: string; ts: number }>();
+
+/** Track last LLM prompt per session for retry detection */
+const lastLlmPromptPerSession = new Map<string, { prompt: string; ts: number }>();
+
+/** Track channel per session for channel switch detection */
+const lastChannelPerSession = new Map<string, string>();
+
 // ─── Plugin Entry ───────────────────────────────────────────────────
 
 export default {
@@ -288,18 +472,60 @@ export default {
     // message_sent — captures messages after they are delivered to the channel.
     api.on("message_sent", async (event: any, ctx: any) => {
       const sk = ctx?.sessionKey || event?.sessionKey;
+      const sessionId = sk || "__fallback__";
       const content = event?.content || "";
+      const channel = ctx?.channelId || event?.channelId || "unknown";
+      const success = event?.success !== false;
+
       send({
         ...baseEvent("tool_call_end", sk),
-        tool_name: `message:${ctx?.channelId || event?.channelId || "unknown"}`,
+        tool_name: `message:${channel}`,
         tool_result: JSON.stringify({
           direction: "outbound",
           to: event?.to,
-          channel: ctx?.channelId || event?.channelId,
-          success: event?.success !== false,
+          channel,
+          success,
           content: content.slice(0, 4096),
         }),
       });
+
+      // ── Semantic: message_delivered / message_failed ──
+      if (success) {
+        send({
+          ...baseEvent("message_delivered", sk),
+          tool_name: `channel:${channel}`,
+          tool_result: JSON.stringify({
+            channel,
+            to: event?.to,
+            content_length: content.length,
+          }),
+        });
+      } else {
+        send({
+          ...baseEvent("message_failed", sk),
+          tool_name: `channel:${channel}`,
+          error_type: "delivery_failure",
+          error_message: event?.error || "Message delivery failed",
+          tool_result: JSON.stringify({
+            channel,
+            to: event?.to,
+          }),
+        });
+      }
+
+      // ── Semantic: channel_switch ──
+      const prevChannel = lastChannelPerSession.get(sessionId);
+      if (prevChannel && prevChannel !== channel) {
+        send({
+          ...baseEvent("channel_switch", sk),
+          tool_name: "channel",
+          tool_args: JSON.stringify({
+            previous_channel: prevChannel,
+            new_channel: channel,
+          }),
+        });
+      }
+      lastChannelPerSession.set(sessionId, channel);
     });
 
     // ──────────────────────────────────────────────────────────────
@@ -310,10 +536,12 @@ export default {
     // PluginHookLlmInputEvent: { runId, sessionId, provider, model, systemPrompt?, prompt, historyMessages, imagesCount }
     api.on("llm_input", async (event: any) => {
       const sk = event?.sessionKey;
+      const sessionId = sk || "__fallback__";
 
       // Extract the user's prompt — event.prompt is the confirmed field
       const rawPrompt: string = event?.prompt || "";
       const messages: any[] = event?.historyMessages || [];
+      const model: string = event?.model || "";
 
       let userPrompt = "";
       if (rawPrompt) {
@@ -335,27 +563,95 @@ export default {
 
       const preview = userPrompt.slice(0, 2048);
 
-      // NOTE: user_prompt is already emitted by message:received — do NOT duplicate here
-
       send({
         ...baseEvent("llm_call_start", sk),
-        model: event?.model || "",
+        model,
         prompt_preview: preview,
         tool_name: "llm",
         tool_args: JSON.stringify({
-          model: event?.model,
+          model,
           provider: event?.provider,
           message_count: messages.length,
           system_prompt_length: (event?.systemPrompt || "").length || 0,
           images_count: event?.imagesCount || 0,
         }),
       });
+
+      // ── Semantic: context_window_usage ──
+      // Estimate context consumption from message count and content length
+      const totalContentLength = messages.reduce((sum: number, m: any) => {
+        const c = typeof m.content === "string" ? m.content.length : JSON.stringify(m.content || "").length;
+        return sum + c;
+      }, 0) + (event?.systemPrompt || "").length + rawPrompt.length;
+      // Rough token estimate: ~4 chars per token
+      const estimatedTokens = Math.round(totalContentLength / 4);
+      // Most models have 128k-1M context; flag if > 50k estimated tokens
+      if (estimatedTokens > 50000) {
+        send({
+          ...baseEvent("context_window_usage", sk),
+          tool_name: "context",
+          tool_args: JSON.stringify({
+            estimated_tokens: estimatedTokens,
+            message_count: messages.length,
+            content_length: totalContentLength,
+            model,
+          }),
+        });
+      }
+
+      // ── Semantic: pii_detected ──
+      const piiTypes = detectPII(userPrompt);
+      if (piiTypes.length > 0) {
+        send({
+          ...baseEvent("pii_detected", sk),
+          tool_name: "guardrail",
+          tool_args: JSON.stringify({
+            pii_types: piiTypes,
+            location: "user_prompt",
+          }),
+        });
+      }
+
+      // ── Semantic: fallback_triggered ──
+      // Detect if the model changed between consecutive LLM calls
+      const prevModel = lastModelPerSession.get(sessionId);
+      if (prevModel && model && prevModel !== model) {
+        send({
+          ...baseEvent("fallback_triggered", sk),
+          model,
+          tool_name: "model:fallback",
+          tool_args: JSON.stringify({
+            previous_model: prevModel,
+            new_model: model,
+          }),
+        });
+      }
+      if (model) lastModelPerSession.set(sessionId, model);
+
+      // ── Semantic: llm_retry ──
+      // Detect if the same prompt is being sent again within 60 seconds
+      const prevPrompt = lastLlmPromptPerSession.get(sessionId);
+      const promptSig = preview.slice(0, 200);
+      const now = Date.now();
+      if (prevPrompt && prevPrompt.prompt === promptSig && (now - prevPrompt.ts) < 60000) {
+        send({
+          ...baseEvent("llm_retry", sk),
+          model,
+          tool_name: "llm:retry",
+          tool_args: JSON.stringify({
+            prompt_signature: promptSig.slice(0, 100),
+            time_since_last_ms: now - prevPrompt.ts,
+          }),
+        });
+      }
+      lastLlmPromptPerSession.set(sessionId, { prompt: promptSig, ts: now });
     });
 
     // Intercept LLM output (completions from provider)
     // PluginHookLlmOutputEvent: { runId, sessionId, provider, model, assistantTexts: string[], lastAssistant?, usage?: { input, output, cacheRead } }
     api.on("llm_output", async (event: any) => {
       const sk = event?.sessionKey;
+      const model: string = event?.model || "";
 
       // assistantTexts is the correct field — it's a string array
       const assistantTexts: string[] = event?.assistantTexts || [];
@@ -368,38 +664,153 @@ export default {
         fullOutput = typeof la === "string" ? la : (la?.content || la?.text || JSON.stringify(la));
       }
 
+      const inputTokens = event?.usage?.input || event?.usage?.inputTokens || 0;
+      const outputTokens = event?.usage?.output || event?.usage?.outputTokens || 0;
+      const cacheRead = event?.usage?.cacheRead || 0;
+
       send({
         ...baseEvent("llm_call_end", sk),
-        model: event?.model || "",
+        model,
         llm_output_full: fullOutput.slice(0, 8192),
-        input_tokens: event?.usage?.input || event?.usage?.inputTokens || 0,
-        output_tokens: event?.usage?.output || event?.usage?.outputTokens || 0,
+        input_tokens: inputTokens,
+        output_tokens: outputTokens,
         tool_name: "llm",
         tool_result: JSON.stringify({
-          model: event?.model,
+          model,
           provider: event?.provider,
           output_length: fullOutput.length,
-          cache_read: event?.usage?.cacheRead || 0,
+          cache_read: cacheRead,
         }),
       });
+
+      // ── Semantic: token_usage ──
+      if (inputTokens > 0 || outputTokens > 0) {
+        send({
+          ...baseEvent("token_usage", sk),
+          model,
+          input_tokens: inputTokens,
+          output_tokens: outputTokens,
+          tool_name: "cost",
+          tool_args: JSON.stringify({
+            model,
+            provider: event?.provider,
+            input_tokens: inputTokens,
+            output_tokens: outputTokens,
+            cache_read: cacheRead,
+            total_tokens: inputTokens + outputTokens,
+          }),
+        });
+      }
+
+      // ── Semantic: thinking / plan / decision analysis ──
+      const llmAnalysis = analyzeLlmOutput(fullOutput);
+      for (const analysis of llmAnalysis) {
+        if (analysis.type === "thinking") {
+          // Emit thinking_start and thinking_end as a pair
+          send({
+            ...baseEvent("thinking_start", sk),
+            tool_name: "reasoning",
+            tool_args: JSON.stringify({ model }),
+          });
+          send({
+            ...baseEvent("thinking_end", sk),
+            tool_name: "reasoning",
+            llm_output_full: analysis.detail,
+            tool_result: JSON.stringify({
+              thinking_length: analysis.detail.length,
+            }),
+          });
+        } else if (analysis.type === "plan_created") {
+          send({
+            ...baseEvent("plan_created", sk),
+            tool_name: "planning",
+            llm_output_full: analysis.detail,
+            tool_result: JSON.stringify({
+              step_count: (analysis.detail.match(/^\s*\d+\./gm) || []).length,
+            }),
+          });
+        } else if (analysis.type === "decision_point") {
+          send({
+            ...baseEvent("decision_point", sk),
+            tool_name: "reasoning",
+            llm_output_full: analysis.detail,
+          });
+        }
+      }
+
+      // ── Semantic: rate_limit_hit ──
+      // Detect rate limit in LLM errors/content
+      if (fullOutput && /rate.?limit|quota.?exceeded|429|too many requests/i.test(fullOutput)) {
+        send({
+          ...baseEvent("rate_limit_hit", sk),
+          model,
+          tool_name: "provider",
+          error_type: "rate_limit",
+          error_message: fullOutput.slice(0, 500),
+        });
+      }
     });
 
     // Intercept tool calls BEFORE execution (sequential — can block)
     api.on("before_tool_call", async (event: any) => {
       const sk = event?.sessionKey;
+      const sessionId = sk || "__fallback__";
       const toolName = event?.name || event?.toolName || "unknown";
       const toolArgs = event?.params || event?.args || event?.input || {};
+      const toolArgsStr = JSON.stringify(toolArgs).slice(0, 4096);
 
       send({
         ...baseEvent("tool_call_start", sk),
         tool_name: toolName,
-        tool_args: JSON.stringify(toolArgs).slice(0, 4096),
+        tool_args: toolArgsStr,
         call_id: event?.callId || event?.tool_use_id || "",
       });
 
-      // Optional: return { block: true, blockReason: "..." } for high-risk
-      // For now, we observe only — blocking will be added once risk rules
-      // are evaluated server-side
+      // ── Semantic: classify tool into semantic category ──
+      const semanticType = classifyToolStart(toolName, toolArgs);
+      if (semanticType) {
+        const semanticArgs: Record<string, unknown> = {
+          original_tool: toolName,
+        };
+
+        // Add context-specific details based on semantic type
+        if (semanticType === "file_read" || semanticType === "file_write") {
+          semanticArgs.file_path = toolArgs?.path || toolArgs?.file || toolArgs?.filePath || "";
+        } else if (semanticType === "code_executed") {
+          semanticArgs.command = (toolArgs?.command || toolArgs?.cmd || toolArgs?.script || "").toString().slice(0, 500);
+        } else if (semanticType === "browser_navigate") {
+          semanticArgs.url = toolArgs?.url || toolArgs?.href || "";
+        } else if (semanticType === "knowledge_retrieval") {
+          semanticArgs.query = toolArgs?.query || toolArgs?.search || "";
+        } else if (semanticType === "subagent_delegated") {
+          semanticArgs.target = toolArgs?.sessionKey || toolArgs?.target || "";
+          semanticArgs.task = toolArgs?.task || toolArgs?.message || "";
+        }
+
+        send({
+          ...baseEvent(semanticType, sk),
+          tool_name: toolName,
+          tool_args: JSON.stringify(semanticArgs).slice(0, 4096),
+          call_id: event?.callId || event?.tool_use_id || "",
+        });
+      }
+
+      // ── Semantic: tool_retry detection ──
+      const toolSig = `${toolName}:${toolArgsStr.slice(0, 200)}`;
+      const now = Date.now();
+      const prevTool = lastToolCallPerSession.get(sessionId);
+      if (prevTool && prevTool.tool === toolName && prevTool.args === toolArgsStr.slice(0, 200) && (now - prevTool.ts) < 30000) {
+        send({
+          ...baseEvent("tool_retry", sk),
+          tool_name: toolName,
+          tool_args: JSON.stringify({
+            retry_of: toolName,
+            time_since_last_ms: now - prevTool.ts,
+          }),
+        });
+      }
+      lastToolCallPerSession.set(sessionId, { tool: toolName, args: toolArgsStr.slice(0, 200), ts: now });
+
       return undefined;
     });
 
@@ -482,6 +893,7 @@ export default {
       const result = event?.result || "";
       const resultStr =
         typeof result === "string" ? result : JSON.stringify(result);
+      const durationMs = event?.durationMs || 0;
 
       // Always emit tool_call_end with the result
       send({
@@ -489,7 +901,7 @@ export default {
         tool_name: toolName,
         tool_result: resultStr.slice(0, 4096),
         call_id: event?.toolCallId || "",
-        duration_ms: event?.durationMs || 0,
+        duration_ms: durationMs,
         error_type: error ? "tool_error" : undefined,
         error_message: error
           ? typeof error === "string"
@@ -508,8 +920,68 @@ export default {
           error_type: "tool_error",
           error_message: errorMsg,
           call_id: event?.toolCallId || "",
-          duration_ms: event?.durationMs || 0,
+          duration_ms: durationMs,
         });
+      }
+
+      // ── Semantic: classify tool end events ──
+      const semanticEndEvents = classifyToolEnd(toolName, error, durationMs);
+      for (const semEvent of semanticEndEvents) {
+        if (semEvent === "latency_warning") {
+          send({
+            ...baseEvent("latency_warning", sk),
+            tool_name: toolName,
+            duration_ms: durationMs,
+            tool_args: JSON.stringify({
+              threshold_ms: 15000,
+              actual_ms: durationMs,
+              tool: toolName,
+            }),
+          });
+        } else if (semEvent === "subagent_result_received") {
+          send({
+            ...baseEvent("subagent_result_received", sk),
+            tool_name: toolName,
+            tool_result: resultStr.slice(0, 4096),
+            duration_ms: durationMs,
+          });
+        } else if (semEvent === "content_filtered" || semEvent === "tool_blocked" || semEvent === "permission_escalation") {
+          const errMsg = error ? (typeof error === "string" ? error : error.message || String(error)) : "";
+          send({
+            ...baseEvent(semEvent, sk),
+            tool_name: toolName,
+            error_type: semEvent,
+            error_message: errMsg,
+          });
+        }
+      }
+
+      // ── Semantic: detect handoff_to_human ──
+      // Check if tool result contains human handoff patterns
+      if (resultStr && /needs? human|escalat|hand.?off|manual review|require.*approval/i.test(resultStr)) {
+        send({
+          ...baseEvent("handoff_to_human", sk),
+          tool_name: toolName,
+          tool_result: resultStr.slice(0, 1000),
+        });
+      }
+
+      // ── Semantic: human_approval_requested ──
+      // Detect approval request patterns in tool names or results
+      if (/approv|confirm|consent|authorize/i.test(toolName)) {
+        send({
+          ...baseEvent("human_approval_requested", sk),
+          tool_name: toolName,
+          tool_args: JSON.stringify(event?.params || {}),
+        });
+        // If it completed without error, the approval was received
+        if (!error) {
+          send({
+            ...baseEvent("human_approval_received", sk),
+            tool_name: toolName,
+            tool_result: resultStr.slice(0, 1000),
+          });
+        }
       }
     });
 
@@ -582,6 +1054,20 @@ export default {
         });
       }
 
+      // ── Semantic: message_draft ──
+      // This captures the agent's draft before delivery — the "about to send" moment
+      send({
+        ...baseEvent("message_draft", sk),
+        llm_output_full: content.slice(0, 8192),
+        tool_name: `draft:${ctx?.channelId || event?.channelId || "unknown"}`,
+        tool_args: JSON.stringify({
+          to: event?.to,
+          channel: ctx?.channelId || event?.channelId,
+          is_error: isErrorMessage,
+          content_length: content.length,
+        }),
+      });
+
       // Emit the agent's response
       send({
         ...baseEvent("agent_response", sk),
@@ -607,17 +1093,47 @@ export default {
         tool_name: "session:compaction",
         tool_args: JSON.stringify({ phase: "before" }),
       });
+      // ── Semantic: compaction_start ──
+      send({
+        ...baseEvent("compaction_start", sk),
+        tool_name: "session:compaction",
+        tool_args: JSON.stringify({
+          reason: event?.reason || "context_limit",
+          message_count: event?.messageCount || event?.messages?.length || 0,
+        }),
+      });
     });
 
     // after_compaction — session compaction completed
     api.on("after_compaction", async (event: any, ctx: any) => {
       const sk = ctx?.sessionKey || event?.sessionKey;
+      const summary = event?.summary?.slice?.(0, 2000) || "";
+
       send({
         ...baseEvent("tool_call_end", sk),
         tool_name: "session:compaction",
         tool_result: JSON.stringify({
           phase: "after",
-          summary: event?.summary?.slice?.(0, 1000) || "",
+          summary: summary.slice(0, 1000),
+        }),
+      });
+      // ── Semantic: compaction_end ──
+      send({
+        ...baseEvent("compaction_end", sk),
+        tool_name: "session:compaction",
+        tool_result: JSON.stringify({
+          summary_length: summary.length,
+          summary_preview: summary.slice(0, 500),
+        }),
+      });
+      // ── Semantic: context_truncated ──
+      // Compaction always means context was truncated/summarized
+      send({
+        ...baseEvent("context_truncated", sk),
+        tool_name: "session:context",
+        tool_args: JSON.stringify({
+          reason: "compaction",
+          summary_preview: summary.slice(0, 500),
         }),
       });
     });
@@ -649,6 +1165,16 @@ export default {
         tool_result: JSON.stringify({
           sessionId: ctx?.sessionId || event?.sessionId,
           reason: event?.reason || "normal",
+        }),
+      });
+      // ── Semantic: checkpoint_saved ──
+      // Session end implies state was saved/checkpointed
+      send({
+        ...baseEvent("checkpoint_saved", sk),
+        tool_name: "session:checkpoint",
+        tool_result: JSON.stringify({
+          sessionId: ctx?.sessionId || event?.sessionId,
+          reason: event?.reason || "session_end",
         }),
       });
     });
