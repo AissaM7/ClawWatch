@@ -167,6 +167,29 @@ function baseEvent(
   };
 }
 
+/**
+ * Build a base event from an EXISTING RunState.
+ * Unlike baseEvent(), this NEVER creates a new run — it reuses a known run.
+ * Use this for lifecycle-ending events (agent_end, subagent_ended) to prevent
+ * orphan runs when the session has already been partially cleaned up.
+ */
+function baseEventFromRun(
+  eventType: string,
+  run: RunState
+): Record<string, unknown> {
+  run.seq++;
+  return {
+    event_id: crypto.randomUUID(),
+    run_id: run.runId,
+    agent_name: "openclaw",
+    goal: "",
+    wall_ts: Date.now() / 1000,
+    run_offset_ms: Date.now() - run.startedAt,
+    event_type: eventType,
+    sequence_num: run.seq,
+  };
+}
+
 // ─── Session Cleanup ────────────────────────────────────────────────
 
 /** Evict sessions older than 4 hours to prevent unbounded memory growth */
@@ -226,8 +249,9 @@ export default {
         ...baseEvent("agent_end", sk),
         status: "completed",
       });
-      // Clean up the session entry
-      if (sk) sessions.delete(sk);
+      // NOTE: Do NOT delete the session here. The agent_end hook may fire
+      // after this, and it needs the session to resolve the correct run_id.
+      // Session cleanup happens in the agent_end handler or via TTL eviction.
     });
 
     api.on("command:reset", async (event: any) => {
@@ -422,14 +446,26 @@ export default {
     // PluginHookAgentContext: { agentId, sessionKey, sessionId, workspaceDir, messageProvider, trigger, channelId }
     api.on("agent_end", async (event: any, ctx: any) => {
       const sk = ctx?.sessionKey || event?.sessionKey;
+
+      // CRITICAL: Use existing session only — never create a new run for agent_end.
+      // If command:stop already emitted agent_end and this is a duplicate fire,
+      // the session will still exist (we no longer delete in command:stop).
+      // If somehow the session is gone, skip to avoid creating orphan runs.
+      const run = sk ? sessions.get(sk) : null;
+      if (!run) {
+        // Session already gone — either already handled or no session.
+        // Skip to prevent creating an orphan run.
+        return;
+      }
+
       const success: boolean = event?.success === true;
       const errorMsg: string = event?.error || "";
       const durationMs: number = event?.durationMs || 0;
       const status = success ? "completed" : (errorMsg ? "error" : "unknown");
 
-      // Always emit agent_end with actual status
+      // Always emit agent_end with actual status, using the EXISTING run
       send({
-        ...baseEvent("agent_end", sk),
+        ...baseEventFromRun("agent_end", run),
         status,
         duration_ms: durationMs,
         error_message: errorMsg || undefined,
@@ -439,7 +475,7 @@ export default {
       // If the agent FAILED, emit a dedicated agent_error event for prominent UI display
       if (!success && errorMsg) {
         send({
-          ...baseEvent("agent_error", sk),
+          ...baseEventFromRun("agent_error", run),
           error_type: errorMsg.includes("timed out") ? "timeout" : "agent_failure",
           error_message: errorMsg,
           duration_ms: durationMs,
@@ -457,7 +493,7 @@ export default {
         // as what the agent "said" — even if message_sending also fires,
         // this ensures the error is captured at the agent_end moment
         send({
-          ...baseEvent("agent_response", sk),
+          ...baseEventFromRun("agent_response", run),
           llm_output_full: errorMsg.slice(0, 8192),
           tool_name: `response:${ctx?.channelId || "unknown"}`,
           tool_result: JSON.stringify({
@@ -467,6 +503,9 @@ export default {
           }),
         });
       }
+
+      // NOW safe to clean up the session — all events have been emitted
+      if (sk) sessions.delete(sk);
     });
 
     // Intercept after_tool_call — standard plugin hook with error field
@@ -500,11 +539,16 @@ export default {
     // PluginHookSubagentEndedEvent: { targetSessionKey, targetKind?, reason?, outcome, error?, durationMs?, runId? }
     api.on("subagent_ended", async (event: any, ctx: any) => {
       const sk = ctx?.sessionKey || event?.sessionKey;
+
+      // Use existing session only — never create a new run for subagent completion
+      const run = sk ? sessions.get(sk) : null;
+      if (!run) return;  // No session = already handled or orphan
+
       const success: boolean = event?.outcome === "ok" || event?.outcome === "completed";
       const errorMsg: string = event?.error || "";
 
       send({
-        ...baseEvent("agent_end", sk),
+        ...baseEventFromRun("agent_end", run),
         status: success ? "completed" : (errorMsg ? "error" : event?.outcome || "unknown"),
         error_message: errorMsg || undefined,
         error_type: !success && errorMsg ? "subagent_error" : undefined,
@@ -519,7 +563,7 @@ export default {
       // Emit agent_error for failed subagents
       if (!success && errorMsg) {
         send({
-          ...baseEvent("agent_error", sk),
+          ...baseEventFromRun("agent_error", run),
           error_type: "subagent_error",
           error_message: errorMsg,
           tool_name: "subagent",

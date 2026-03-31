@@ -103,7 +103,7 @@ RUNS_COLS = [
 
 # Run consolidation window — runs starting within this many seconds
 # of an existing run are treated as the same user message.
-MERGE_WINDOW_SECONDS = 120
+MERGE_WINDOW_SECONDS = 3600  # 1 hour — safety net for long-running agents
 
 THREADS_COLS = [
     "thread_id TEXT PRIMARY KEY",
@@ -761,14 +761,28 @@ class EventStore:
         if not existing:
             # New run — check if there's a recent run we should merge with
             wall_ts = data.get("wall_ts", time.time())
-            recent = idx_conn.execute(
-                "SELECT run_id, merge_group, started_at FROM runs "
-                "WHERE agent_name NOT LIKE '%gateway%' "
-                "AND is_primary = 1 "
-                "AND ABS(? - started_at) < ? "
-                "ORDER BY started_at DESC LIMIT 1",
-                (wall_ts, MERGE_WINDOW_SECONDS),
-            ).fetchone()
+
+            # For agent lifecycle-ending events, use a broader search:
+            # find the most recent non-ended run regardless of time window.
+            # Agent completion should ALWAYS be tied to an existing run.
+            if event_type in ("agent_end", "agent_error", "agent_response"):
+                recent = idx_conn.execute(
+                    "SELECT run_id, merge_group, started_at FROM runs "
+                    "WHERE agent_name NOT LIKE '%gateway%' "
+                    "AND is_primary = 1 "
+                    "AND (ended_at IS NULL OR status = 'running') "
+                    "ORDER BY started_at DESC LIMIT 1",
+                    (),
+                ).fetchone()
+            else:
+                recent = idx_conn.execute(
+                    "SELECT run_id, merge_group, started_at FROM runs "
+                    "WHERE agent_name NOT LIKE '%gateway%' "
+                    "AND is_primary = 1 "
+                    "AND ABS(? - started_at) < ? "
+                    "ORDER BY started_at DESC LIMIT 1",
+                    (wall_ts, MERGE_WINDOW_SECONDS),
+                ).fetchone()
 
             if recent:
                 # Found a recent primary run — merge into it
