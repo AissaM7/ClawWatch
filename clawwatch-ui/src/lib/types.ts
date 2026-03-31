@@ -7,7 +7,30 @@ export type EventType =
   | 'file_read' | 'file_write' | 'file_delete'
   | 'network_request' | 'network_response'
   | 'subprocess_exec' | 'env_access'
-  | 'loop_detected' | 'review_note' | 'user_prompt' | 'agent_response';
+  | 'loop_detected' | 'review_note' | 'user_prompt' | 'agent_response'
+  // Semantic: Tool Classification
+  | 'code_executed' | 'browser_navigate' | 'browser_screenshot'
+  | 'knowledge_retrieval' | 'api_call'
+  | 'memory_read' | 'memory_write'
+  // Semantic: Reasoning & Planning
+  | 'thinking_start' | 'thinking_end'
+  | 'plan_created' | 'plan_step_start' | 'plan_step_end'
+  | 'decision_point'
+  // Semantic: Message Lifecycle
+  | 'message_draft' | 'message_delivered' | 'message_failed' | 'channel_switch'
+  // Semantic: Performance & Cost
+  | 'token_usage' | 'latency_warning' | 'context_window_usage' | 'rate_limit_hit'
+  // Semantic: Retry & Recovery
+  | 'llm_retry' | 'tool_retry' | 'fallback_triggered' | 'checkpoint_saved'
+  // Semantic: Safety & Guardrails
+  | 'content_filtered' | 'pii_detected' | 'tool_blocked' | 'permission_escalation'
+  | 'human_approval_requested' | 'human_approval_received' | 'handoff_to_human'
+  // Semantic: Multi-Agent
+  | 'subagent_delegated' | 'subagent_result_received' | 'agent_collaboration'
+  // Semantic: Context & State
+  | 'compaction_start' | 'compaction_end' | 'context_truncated'
+  // Session
+  | 'session_start' | 'session_end' | 'model_resolve' | 'tool_result_persist';
 
 export type RiskLevel = 'safe' | 'low' | 'medium' | 'high' | 'critical';
 

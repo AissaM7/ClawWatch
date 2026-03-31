@@ -853,6 +853,26 @@ class EventStore:
 
         run_conn = _init_run_db(run_id)
 
+        # ── Deduplication for user_prompt and agent_response ──────────
+        # OpenClaw can emit duplicate hooks for these (e.g., message:received AND before_tool_call:user:telegram)
+        if event_type in ("user_prompt", "agent_response"):
+            try:
+                content_sig = data.get("prompt_preview", "") if event_type == "user_prompt" else data.get("llm_output_full", "")
+                content_sig = content_sig[:100]  # Just need a prefix to verify it's the same message
+                
+                # Check for same event_type within last 2 seconds
+                recent_dup = run_conn.execute(
+                    "SELECT 1 FROM events WHERE event_type = ? AND ABS(? - wall_ts) < 2 "
+                    "AND (prompt_preview LIKE ? OR llm_output_full LIKE ?) LIMIT 1",
+                    (event_type, wall_ts, f"{content_sig}%", f"{content_sig}%")
+                ).fetchone()
+                
+                if recent_dup:
+                    # It's a duplicate of an event we just processed, drop it
+                    return
+            except Exception:
+                pass
+
         # Process user_prompt — this drives the hierarchy
         if event_type == "user_prompt":
             # Extract channel and user info from tool_args

@@ -3977,6 +3977,52 @@ a:hover {
   color: #fb923c;
 }
 
+/* ── Semantic Event Icon Colors ────────────────── */
+
+.trace-icon--reasoning {
+  color: #c084fc;          /* purple-400 — thinking, planning, decisions */
+}
+
+.trace-icon--search {
+  color: #22d3ee;          /* cyan-400 — knowledge retrieval, web search */
+}
+
+.trace-icon--message {
+  color: #60a5fa;          /* blue-400 — drafts, channel switches, responses */
+}
+
+.trace-icon--message-ok {
+  color: #34d399;          /* emerald-400 — message delivered successfully */
+}
+
+.trace-icon--warning {
+  color: #fbbf24;          /* amber-400 — latency, context window, fallbacks */
+}
+
+.trace-icon--retry {
+  color: #f59e0b;          /* amber-500 — retries */
+}
+
+.trace-icon--safety {
+  color: #fb7185;          /* rose-400 — content filtered, PII, blocked, escalation */
+}
+
+.trace-icon--agent {
+  color: #818cf8;          /* indigo-400 — multi-agent collaboration */
+}
+
+.trace-icon--memory {
+  color: #2dd4bf;          /* teal-400 — memory read/write */
+}
+
+.trace-icon--code {
+  color: #fb923c;          /* orange-400 — code execution */
+}
+
+.trace-icon--cost {
+  color: #fbbf24;          /* amber-400 — token usage, cost tracking */
+}
+
 /* Label */
 .trace-label {
   font-size: 12.5px;

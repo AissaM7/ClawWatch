@@ -1,0 +1,2 @@
+/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/runpy.py:127: RuntimeWarning: 'clawwatch.server' found in sys.modules after import of package 'clawwatch', but prior to execution of 'clawwatch.server'; this may result in unpredictable behaviour
+  warn(RuntimeWarning(msg))

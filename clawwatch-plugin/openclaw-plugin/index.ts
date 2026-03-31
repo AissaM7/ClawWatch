@@ -278,8 +278,8 @@ function classifyToolEnd(
   if (name === "sessions_spawn" || name === "subagent_spawn" || name === "delegate")
     events.push("subagent_result_received");
 
-  // Latency warning: tool took > 15 seconds
-  if (durationMs > 15000)
+  // Latency warning: tool took > 30 seconds (web searches naturally take 15-20s)
+  if (durationMs > 30000)
     events.push("latency_warning");
 
   // Content filtering: detect safety blocks in results
@@ -585,8 +585,8 @@ export default {
       }, 0) + (event?.systemPrompt || "").length + rawPrompt.length;
       // Rough token estimate: ~4 chars per token
       const estimatedTokens = Math.round(totalContentLength / 4);
-      // Most models have 128k-1M context; flag if > 50k estimated tokens
-      if (estimatedTokens > 50000) {
+      // Most models have 128k-1M context; flag if > 100k estimated tokens
+      if (estimatedTokens > 100000) {
         send({
           ...baseEvent("context_window_usage", sk),
           tool_name: "context",
@@ -957,8 +957,10 @@ export default {
       }
 
       // ── Semantic: detect handoff_to_human ──
-      // Check if tool result contains human handoff patterns
-      if (resultStr && /needs? human|escalat|hand.?off|manual review|require.*approval/i.test(resultStr)) {
+      // Check if tool result contains human handoff patterns, BUT only for specific tools
+      // We don't want this firing because a web search result says "manual review"
+      const isCommsTool = toolName.startsWith("message") || toolName === "telegram" || toolName === "slack" || toolName === "response:telegram";
+      if (isCommsTool && resultStr && /needs? human|escalat|hand.?off|manual review|require.*approval/i.test(resultStr)) {
         send({
           ...baseEvent("handoff_to_human", sk),
           tool_name: toolName,
@@ -968,7 +970,7 @@ export default {
 
       // ── Semantic: human_approval_requested ──
       // Detect approval request patterns in tool names or results
-      if (/approv|confirm|consent|authorize/i.test(toolName)) {
+      if (/^approv|confirm|consent|authorize/i.test(toolName) && toolName !== "unknown") {
         send({
           ...baseEvent("human_approval_requested", sk),
           tool_name: toolName,
