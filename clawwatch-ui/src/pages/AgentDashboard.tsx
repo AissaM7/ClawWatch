@@ -241,7 +241,7 @@ export default function AgentDashboard() {
             <div className="agent-dash-header">
                 <div className="agent-dash-header-left">
                     <div className="breadcrumb">
-                        <Link to="/">Agents</Link>
+                        <Link to="/agents">Agents</Link>
                         <span className="breadcrumb-sep">›</span>
                         <span>{agentId}</span>
                     </div>

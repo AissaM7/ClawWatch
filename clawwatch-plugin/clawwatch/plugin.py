@@ -49,7 +49,12 @@ class ClawWatchPlugin:
         "network_request", "network_response",
         "subprocess_exec", "env_access",
     ]
-    permissions = ["filesystem_write", "network_listen"]
+    # ── Global State across plugin instances ──────────────────────
+    _global_run_id: str = ""
+    _global_agent_name: str = ""
+    _global_goal: str = ""
+    _global_start_ts: float = 0.0
+    _global_active_agents: int = 0
 
     def __init__(self) -> None:
         config = _load_config()
@@ -60,11 +65,8 @@ class ClawWatchPlugin:
         self._server = ClawWatchServer(self._port)
         self._loop_detector = LoopDetector(self._loop_threshold)
         self._handlers = HookHandlers()
-
-        self._run_id: str = ""
-        self._agent_name: str = ""
-        self._goal: str = ""
-        self._start_ts: float = 0.0
+        
+        self._server.start()
 
     # ── Internal helpers ──────────────────────────────────────────
 
@@ -133,28 +135,34 @@ class ClawWatchPlugin:
     # ── Handler implementations ───────────────────────────────────
 
     def _handle_agent_start(self, ctx: Any) -> None:
-        self._run_id = str(uuid.uuid4())
-        self._start_ts = time.time()
-        self._agent_name = getattr(ctx, "agent_name", "unknown")
-        self._goal = getattr(ctx, "goal", "")
+        if ClawWatchPlugin._global_active_agents == 0:
+            ClawWatchPlugin._global_run_id = str(uuid.uuid4())
+            ClawWatchPlugin._global_start_ts = time.time()
+            ClawWatchPlugin._global_agent_name = getattr(ctx, "agent_name", "unknown")
+            ClawWatchPlugin._global_goal = getattr(ctx, "goal", "")
 
-        self._store.open_run(self._run_id, self._agent_name, self._goal)
-        self._server.start()
+            self._store.open_run(ClawWatchPlugin._global_run_id, ClawWatchPlugin._global_agent_name, ClawWatchPlugin._global_goal)
+            
+            event = self._handlers.agent_start(ctx, ClawWatchPlugin._global_run_id, ClawWatchPlugin._global_start_ts)
+            self._emit(event)
 
-        event = self._handlers.agent_start(ctx, self._run_id, self._start_ts)
-        self._emit(event)
+        ClawWatchPlugin._global_active_agents += 1
 
     def _handle_agent_end(self, ctx: Any) -> None:
-        event = self._handlers.agent_end(
-            ctx, self._run_id, self._agent_name, self._goal, self._start_ts
-        )
-        self._emit(event)
-        status = getattr(ctx, "status", "completed")
-        self._store.close_run(status)
+        ClawWatchPlugin._global_active_agents = max(0, ClawWatchPlugin._global_active_agents - 1)
+        if ClawWatchPlugin._global_active_agents == 0:
+            event = self._handlers.agent_end(
+                ctx, ClawWatchPlugin._global_run_id, ClawWatchPlugin._global_agent_name, ClawWatchPlugin._global_goal, ClawWatchPlugin._global_start_ts
+            )
+            self._emit(event)
+            
+            status = getattr(ctx, "status", "completed")
+            self._store.close_run(status)
+            ClawWatchPlugin._global_run_id = ""
 
     def _handle_tool_call_start(self, ctx: Any) -> None:
         event = self._handlers.tool_call_start(
-            ctx, self._run_id, self._agent_name, self._goal, self._start_ts
+            ctx, ClawWatchPlugin._global_run_id, ClawWatchPlugin._global_agent_name, ClawWatchPlugin._global_goal, ClawWatchPlugin._global_start_ts
         )
         self._emit(event)
 
@@ -165,79 +173,79 @@ class ClawWatchPlugin:
         if result:
             arg_hash, count = result
             loop_event = build_loop_detected(
-                self._run_id, self._agent_name, self._goal,
-                tool_name, arg_hash, count, self._start_ts,
+                ClawWatchPlugin._global_run_id, ClawWatchPlugin._global_agent_name, ClawWatchPlugin._global_goal,
+                tool_name, arg_hash, count, ClawWatchPlugin._global_start_ts,
             )
             self._emit(loop_event)
 
     def _handle_tool_call_end(self, ctx: Any) -> None:
         event = self._handlers.tool_call_end(
-            ctx, self._run_id, self._agent_name, self._goal, self._start_ts
+            ctx, ClawWatchPlugin._global_run_id, ClawWatchPlugin._global_agent_name, ClawWatchPlugin._global_goal, ClawWatchPlugin._global_start_ts
         )
         self._emit(event)
 
     def _handle_tool_error(self, ctx: Any) -> None:
         event = self._handlers.tool_error(
-            ctx, self._run_id, self._agent_name, self._goal, self._start_ts
+            ctx, ClawWatchPlugin._global_run_id, ClawWatchPlugin._global_agent_name, ClawWatchPlugin._global_goal, ClawWatchPlugin._global_start_ts
         )
         self._emit(event)
 
     def _handle_llm_call_start(self, ctx: Any) -> None:
         event = self._handlers.llm_call_start(
-            ctx, self._run_id, self._agent_name, self._goal, self._start_ts
+            ctx, ClawWatchPlugin._global_run_id, ClawWatchPlugin._global_agent_name, ClawWatchPlugin._global_goal, ClawWatchPlugin._global_start_ts
         )
         self._emit(event)
 
     def _handle_llm_call_end(self, ctx: Any) -> None:
         event = self._handlers.llm_call_end(
-            ctx, self._run_id, self._agent_name, self._goal, self._start_ts
+            ctx, ClawWatchPlugin._global_run_id, ClawWatchPlugin._global_agent_name, ClawWatchPlugin._global_goal, ClawWatchPlugin._global_start_ts
         )
         self._emit(event)
 
     def _handle_llm_error(self, ctx: Any) -> None:
         event = self._handlers.llm_error(
-            ctx, self._run_id, self._agent_name, self._goal, self._start_ts
+            ctx, ClawWatchPlugin._global_run_id, ClawWatchPlugin._global_agent_name, ClawWatchPlugin._global_goal, ClawWatchPlugin._global_start_ts
         )
         self._emit(event)
 
     def _handle_file_read(self, ctx: Any) -> None:
         event = self._handlers.file_read(
-            ctx, self._run_id, self._agent_name, self._goal, self._start_ts
+            ctx, ClawWatchPlugin._global_run_id, ClawWatchPlugin._global_agent_name, ClawWatchPlugin._global_goal, ClawWatchPlugin._global_start_ts
         )
         self._emit(event)
 
     def _handle_file_write(self, ctx: Any) -> None:
         event = self._handlers.file_write(
-            ctx, self._run_id, self._agent_name, self._goal, self._start_ts
+            ctx, ClawWatchPlugin._global_run_id, ClawWatchPlugin._global_agent_name, ClawWatchPlugin._global_goal, ClawWatchPlugin._global_start_ts
         )
         self._emit(event)
 
     def _handle_file_delete(self, ctx: Any) -> None:
         event = self._handlers.file_delete(
-            ctx, self._run_id, self._agent_name, self._goal, self._start_ts
+            ctx, ClawWatchPlugin._global_run_id, ClawWatchPlugin._global_agent_name, ClawWatchPlugin._global_goal, ClawWatchPlugin._global_start_ts
         )
         self._emit(event)
 
     def _handle_network_request(self, ctx: Any) -> None:
         event = self._handlers.network_request(
-            ctx, self._run_id, self._agent_name, self._goal, self._start_ts
+            ctx, ClawWatchPlugin._global_run_id, ClawWatchPlugin._global_agent_name, ClawWatchPlugin._global_goal, ClawWatchPlugin._global_start_ts
         )
         self._emit(event)
 
     def _handle_network_response(self, ctx: Any) -> None:
         event = self._handlers.network_response(
-            ctx, self._run_id, self._agent_name, self._goal, self._start_ts
+            ctx, ClawWatchPlugin._global_run_id, ClawWatchPlugin._global_agent_name, ClawWatchPlugin._global_goal, ClawWatchPlugin._global_start_ts
         )
         self._emit(event)
 
     def _handle_subprocess(self, ctx: Any) -> None:
         event = self._handlers.subprocess_exec(
-            ctx, self._run_id, self._agent_name, self._goal, self._start_ts
+            ctx, ClawWatchPlugin._global_run_id, ClawWatchPlugin._global_agent_name, ClawWatchPlugin._global_goal, ClawWatchPlugin._global_start_ts
         )
         self._emit(event)
 
     def _handle_env_access(self, ctx: Any) -> None:
         event = self._handlers.env_access(
-            ctx, self._run_id, self._agent_name, self._goal, self._start_ts
+            ctx, ClawWatchPlugin._global_run_id, ClawWatchPlugin._global_agent_name, ClawWatchPlugin._global_goal, ClawWatchPlugin._global_start_ts
         )
         self._emit(event)

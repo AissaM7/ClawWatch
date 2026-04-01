@@ -10,7 +10,7 @@ import {
     Eye, Shield, Clock, RefreshCw, ArrowRightLeft, Users,
     Database, Bookmark, CheckCircle, GitBranch, Target,
     PenTool, Layers, Lock, UserCheck, AlertOctagon, Gauge,
-    Archive, Radio
+    Archive, Radio, ShieldAlert
 } from 'lucide-react';
 import type { FlatTraceRow, TraceNodeType, TraceStatus } from '../lib/traceTree';
 import { formatTraceDuration } from '../lib/traceTree';
@@ -324,6 +324,14 @@ const TraceRow = React.memo(function TraceRow({
 
                 {/* Status badge */}
                 <StatusBadge status={node.status} />
+
+                {/* Security badge */}
+                {node.event?.security_events && node.event.security_events.length > 0 && (
+                    <span className={`trace-security-badge trace-security-badge--${node.event.security_events[0].severity}`}>
+                        <ShieldAlert size={10} />
+                        {node.event.security_events[0].severity === 'critical' ? 'CRITICAL RISKS' : `${node.event.security_events.length} security events`}
+                    </span>
+                )}
 
                 {/* Error propagation dot */}
                 {node.hasChildError && node.status !== 'error' && node.status !== 'timeout' && (

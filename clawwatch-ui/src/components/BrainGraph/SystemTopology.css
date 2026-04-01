@@ -1,0 +1,326 @@
+/* ── System Topology Diagram: Linear Architecture ──────────────── */
+
+.sys-topo {
+    position: relative;
+    width: 100%;
+    background: rgba(8, 8, 12, 0.6);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 12px;
+    overflow: hidden;
+    padding: 24px;
+}
+
+.sys-topo-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 20px;
+}
+
+.sys-topo-title {
+    font-family: 'Outfit', sans-serif;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: rgba(255, 255, 255, 0.4);
+}
+
+.sys-topo-live {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    color: #fd6567;
+    text-transform: uppercase;
+}
+
+.sys-topo-live-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: #fd6567;
+    box-shadow: 0 0 8px rgba(253, 101, 103, 0.6);
+    animation: st-pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes st-pulse {
+
+    0%,
+    100% {
+        opacity: 1;
+        transform: scale(1);
+    }
+
+    50% {
+        opacity: 0.4;
+        transform: scale(0.8);
+    }
+}
+
+.sys-topo-stats {
+    display: flex;
+    gap: 24px;
+}
+
+.sys-topo-stat {
+    text-align: right;
+}
+
+.sys-topo-stat-val {
+    font-size: 18px;
+    font-weight: 600;
+    font-family: 'Outfit', sans-serif;
+    color: rgba(255, 255, 255, 0.9);
+    line-height: 1;
+}
+
+.sys-topo-stat-lbl {
+    font-size: 9px;
+    color: rgba(255, 255, 255, 0.35);
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    margin-top: 4px;
+}
+
+/* SVG area */
+.sys-topo-svg {
+    width: 100%;
+    height: 460px;
+    display: block;
+}
+
+/* ── Glows & Animations for SVG nodes ───────────────────────── */
+
+.node-group {
+    transition: opacity 0.2s ease;
+}
+
+.node-group:hover,
+.node-group[data-hovered="true"] {
+    opacity: 1 !important;
+}
+
+.node-group[data-dimmed="true"] {
+    opacity: 0.25;
+}
+
+.edge-path {
+    transition: stroke-opacity 0.2s ease, stroke-width 0.2s ease;
+}
+
+/* The brain core pulsing */
+@keyframes brain-core-pulse {
+
+    0%,
+    100% {
+        transform: scale(0.95);
+        opacity: 0.8;
+    }
+
+    50% {
+        transform: scale(1.05);
+        opacity: 1;
+    }
+}
+
+.brain-core {
+    transform-origin: center;
+    animation: brain-core-pulse 3s ease-in-out infinite;
+}
+
+/* ── Tooltip ─────────────────────────────────────────────────── */
+
+.sys-topo-tooltip {
+    position: absolute;
+    pointer-events: none;
+    z-index: 20;
+    background: rgba(12, 12, 18, 0.95);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 8px;
+    padding: 12px 16px;
+    min-width: 180px;
+    max-width: 280px;
+    backdrop-filter: blur(16px);
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+    transition: opacity 0.15s ease, transform 0.15s ease;
+    opacity: 0;
+    transform: translateY(4px);
+}
+
+.sys-topo-tooltip.visible {
+    opacity: 1;
+    transform: translateY(0);
+}
+
+.st-tt-title {
+    font-family: 'Outfit', sans-serif;
+    font-size: 13px;
+    font-weight: 600;
+    color: #fff;
+    margin-bottom: 8px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.st-tt-type {
+    font-size: 9px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    padding: 2px 6px;
+    border-radius: 4px;
+    background: rgba(255, 255, 255, 0.06);
+}
+
+.st-tt-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    font-size: 11px;
+    padding: 3px 0;
+}
+
+.st-tt-lbl {
+    color: rgba(255, 255, 255, 0.45);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+}
+
+.st-tt-val {
+    color: rgba(255, 255, 255, 0.9);
+    font-family: 'Outfit', sans-serif;
+    font-weight: 500;
+}
+
+/* ── Legend ───────────────────────────────────────────────────── */
+
+.sys-topo-legend {
+    display: flex;
+    align-items: center;
+    gap: 20px;
+    margin-top: 20px;
+    padding-top: 16px;
+    border-top: 1px dashed rgba(255, 255, 255, 0.08);
+}
+
+.st-legend-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 10px;
+    color: rgba(255, 255, 255, 0.4);
+    font-family: 'JetBrains Mono', monospace;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+/* ── Empty state ─────────────────────────────────────────────── */
+
+.sys-topo-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    height: 340px;
+    gap: 12px;
+}
+
+.sys-topo-empty-ring {
+    width: 64px;
+    height: 64px;
+    border-radius: 50%;
+    border: 1px dashed rgba(253, 101, 103, 0.3);
+    animation: st-empty-spin 10s linear infinite;
+}
+
+@keyframes st-empty-spin {
+    from {
+        transform: rotate(0deg);
+    }
+
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+.sys-topo-empty-text {
+    font-size: 15px;
+    font-weight: 500;
+    color: rgba(255, 255, 255, 0.4);
+    font-family: 'Outfit', sans-serif;
+}
+
+.sys-topo-empty-sub {
+    font-size: 11px;
+    color: rgba(255, 255, 255, 0.25);
+    font-family: 'JetBrains Mono', monospace;
+}
+
+/* ── Subtle edge active glow (CSS-driven, no JS animation) ──── */
+
+.edge-active-glow {
+    stroke-opacity: 0;
+    transition: stroke-opacity 1.2s ease-out;
+    pointer-events: none;
+    stroke-linecap: round;
+    stroke-dasharray: 12 24;
+}
+
+.edge-active-glow.on {
+    stroke-opacity: 0.5;
+    transition: stroke-opacity 0.15s ease-in;
+    animation: edge-flow-anim 0.8s linear infinite;
+}
+
+@keyframes edge-flow-anim {
+    to {
+        stroke-dashoffset: -36;
+    }
+}
+
+/* ── Node pulse ring (CSS-driven) ────────────────────────────── */
+
+.node-pulse-ring {
+    stroke-opacity: 0;
+    transition: stroke-opacity 1.5s ease-out;
+    pointer-events: none;
+}
+
+.node-pulse-ring.on {
+    stroke-opacity: 0.35;
+    transition: stroke-opacity 0.15s ease-in;
+}
+
+/* ── Disconnected state ──────────────────────────────────────── */
+
+.sys-topo-disconnected {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    color: rgba(255, 255, 255, 0.3);
+    text-transform: uppercase;
+}
+
+.sys-topo-disconnected-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.2);
+}
+
+/* Gray out brain when disconnected */
+.brain-disconnected {
+    opacity: 0.3;
+    filter: grayscale(1);
+}
+
+.brain-disconnected .brain-core {
+    animation: none !important;
+}

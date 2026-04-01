@@ -156,6 +156,34 @@ EXCHANGES_COLS = [
 ]
 
 
+SECURITY_EVENTS_COLS = [
+    "id TEXT PRIMARY KEY",
+    "run_id TEXT NOT NULL",
+    "agent_id TEXT",
+    "event_type TEXT NOT NULL",
+    "severity TEXT NOT NULL",
+    "label TEXT NOT NULL",
+    "description TEXT NOT NULL",
+    "raw_command TEXT",
+    "file_path TEXT",
+    "network_target TEXT",
+    "detected_at REAL NOT NULL",
+    "run_timestamp REAL",
+    "acknowledged INTEGER DEFAULT 0",
+    "chapter_id TEXT",
+    "trace_event_index INTEGER",
+    "is_false_positive INTEGER DEFAULT 0",
+]
+
+SECURITY_SKIP_LIST_COLS = [
+    "id TEXT PRIMARY KEY",
+    "pattern_hash TEXT UNIQUE NOT NULL",
+    "event_type TEXT NOT NULL",
+    "reason TEXT",
+    "created_at REAL NOT NULL",
+]
+
+
 def _ensure_dirs() -> None:
     RUNS_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -167,6 +195,15 @@ def _init_index_db() -> sqlite3.Connection:
     conn.execute(f"CREATE TABLE IF NOT EXISTS runs ({', '.join(RUNS_COLS)})")
     conn.execute(f"CREATE TABLE IF NOT EXISTS threads ({', '.join(THREADS_COLS)})")
     conn.execute(f"CREATE TABLE IF NOT EXISTS tasks ({', '.join(TASKS_COLS)})")
+    conn.execute(f"CREATE TABLE IF NOT EXISTS security_events ({', '.join(SECURITY_EVENTS_COLS)})")
+    conn.execute(f"CREATE TABLE IF NOT EXISTS security_skip_list ({', '.join(SECURITY_SKIP_LIST_COLS)})")
+    
+    # Run migrations
+    try:
+        conn.execute("ALTER TABLE security_events ADD COLUMN is_false_positive INTEGER DEFAULT 0")
+    except sqlite3.OperationalError:
+        pass # Column already exists
+    
     conn.commit()
     return conn
 
@@ -1050,3 +1087,264 @@ class EventStore:
             except Exception:
                 pass
         return {}
+
+    # ── Security event methods ───────────────────────────────────
+
+    @staticmethod
+    def insert_security_event(event_dict: dict) -> None:
+        """Insert a security event into index.db. Skips exact duplicates."""
+        if not INDEX_DB.exists():
+            _init_index_db()
+        conn = sqlite3.connect(str(INDEX_DB), check_same_thread=False)
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute(f"CREATE TABLE IF NOT EXISTS security_events ({', '.join(SECURITY_EVENTS_COLS)})")
+
+        # Dedup: same run_id + event_type + raw_command
+        existing = conn.execute(
+            "SELECT id FROM security_events WHERE run_id = ? AND event_type = ? AND raw_command = ?",
+            (event_dict.get("run_id", ""), event_dict.get("event_type", ""),
+             event_dict.get("raw_command", "")),
+        ).fetchone()
+        if existing:
+            conn.close()
+            return
+
+        cols = [c.split()[0] for c in SECURITY_EVENTS_COLS]
+        values = [event_dict.get(c) for c in cols]
+        placeholders = ", ".join(["?"] * len(cols))
+        col_names = ", ".join(cols)
+        conn.execute(f"INSERT INTO security_events ({col_names}) VALUES ({placeholders})", values)
+        conn.commit()
+        conn.close()
+
+    @staticmethod
+    def get_security_events(severity: str = "", run_id: str = "",
+                            acknowledged: str = "", agent_id: str = "",
+                            limit: int = 50, offset: int = 0) -> list[dict]:
+        """Query security events with optional filters."""
+        if not INDEX_DB.exists():
+            return []
+        conn = sqlite3.connect(str(INDEX_DB), check_same_thread=False)
+        conn.row_factory = sqlite3.Row
+        conn.execute(f"CREATE TABLE IF NOT EXISTS security_events ({', '.join(SECURITY_EVENTS_COLS)})")
+
+        conditions = []
+        params: list = []
+        if severity:
+            conditions.append("severity = ?")
+            params.append(severity)
+        if run_id:
+            conditions.append("run_id = ?")
+            params.append(run_id)
+        if acknowledged == "true":
+            conditions.append("acknowledged = 1")
+        elif acknowledged == "false":
+            conditions.append("acknowledged = 0")
+        if agent_id:
+            conditions.append("agent_id = ?")
+            params.append(agent_id)
+            
+        conditions.append("is_false_positive = 0")
+
+        where = (" WHERE " + " AND ".join(conditions)) if conditions else ""
+
+        # Sort: severity order then detected_at desc
+        order = """ORDER BY
+            CASE severity
+                WHEN 'critical' THEN 0
+                WHEN 'high' THEN 1
+                WHEN 'medium' THEN 2
+                WHEN 'low' THEN 3
+            END ASC,
+            detected_at DESC"""
+
+        params.extend([limit, offset])
+        rows = conn.execute(
+            f"SELECT * FROM security_events{where} {order} LIMIT ? OFFSET ?",
+            params,
+        ).fetchall()
+        conn.close()
+        return [dict(r) for r in rows]
+
+    @staticmethod
+    def get_security_events_for_run(run_id: str) -> list[dict]:
+        """Get all security events for a specific run, sorted by run_timestamp."""
+        if not INDEX_DB.exists():
+            return []
+        conn = sqlite3.connect(str(INDEX_DB), check_same_thread=False)
+        conn.row_factory = sqlite3.Row
+        conn.execute(f"CREATE TABLE IF NOT EXISTS security_events ({', '.join(SECURITY_EVENTS_COLS)})")
+        rows = conn.execute(
+            "SELECT * FROM security_events WHERE run_id = ? AND is_false_positive = 0 "
+            "ORDER BY run_timestamp ASC, detected_at ASC",
+            (run_id,),
+        ).fetchall()
+        conn.close()
+        return [dict(r) for r in rows]
+
+    @staticmethod
+    def acknowledge_security_event(event_id: str) -> dict:
+        """Set acknowledged = True. Returns updated event."""
+        if not INDEX_DB.exists():
+            return {}
+        conn = sqlite3.connect(str(INDEX_DB), check_same_thread=False)
+        conn.row_factory = sqlite3.Row
+        conn.execute(f"CREATE TABLE IF NOT EXISTS security_events ({', '.join(SECURITY_EVENTS_COLS)})")
+        conn.execute(
+            "UPDATE security_events SET acknowledged = 1 WHERE id = ?",
+            (event_id,),
+        )
+        conn.commit()
+        row = conn.execute("SELECT * FROM security_events WHERE id = ?", (event_id,)).fetchone()
+        conn.close()
+        return dict(row) if row else {}
+
+    @staticmethod
+    def get_security_stats() -> dict:
+        """Aggregate security stats."""
+        if not INDEX_DB.exists():
+            return {
+                "total_events": 0, "critical_count": 0, "high_count": 0,
+                "medium_count": 0, "low_count": 0,
+                "credential_access_count": 0, "destructive_ops_count": 0,
+                "network_risk_count": 0, "subprocess_count": 0,
+                "runs_affected": 0, "last_scan_at": None,
+                "unscanned_runs_count": 0,
+            }
+        conn = sqlite3.connect(str(INDEX_DB), check_same_thread=False)
+        conn.execute(f"CREATE TABLE IF NOT EXISTS security_events ({', '.join(SECURITY_EVENTS_COLS)})")
+
+        stats = conn.execute("""
+            SELECT
+                COUNT(*) as total_events,
+                SUM(CASE WHEN severity = 'critical' THEN 1 ELSE 0 END) as critical_count,
+                SUM(CASE WHEN severity = 'high' THEN 1 ELSE 0 END) as high_count,
+                SUM(CASE WHEN severity = 'medium' THEN 1 ELSE 0 END) as medium_count,
+                SUM(CASE WHEN severity = 'low' THEN 1 ELSE 0 END) as low_count,
+                SUM(CASE WHEN event_type = 'CREDENTIAL_ACCESS' THEN 1 ELSE 0 END) as credential_access_count,
+                SUM(CASE WHEN event_type IN ('DESTRUCTIVE_FILE_OP', 'DATABASE_WIPE', 'MASS_DELETION') THEN 1 ELSE 0 END) as destructive_ops_count,
+                SUM(CASE WHEN event_type IN ('SENSITIVE_DATA_EXFIL', 'PORT_SCAN_BEHAVIOR', 'EXTERNAL_DOWNLOAD', 'CONFIG_EXFIL') THEN 1 ELSE 0 END) as network_risk_count,
+                SUM(CASE WHEN event_type IN ('SHELL_ESCALATION', 'PROCESS_INJECTION') THEN 1 ELSE 0 END) as subprocess_count,
+                COUNT(DISTINCT run_id) as runs_affected,
+                MAX(detected_at) as last_scan_at
+            FROM security_events
+            WHERE is_false_positive = 0
+        """).fetchone()
+
+        result = {
+            "total_events": stats[0] or 0,
+            "critical_count": stats[1] or 0,
+            "high_count": stats[2] or 0,
+            "medium_count": stats[3] or 0,
+            "low_count": stats[4] or 0,
+            "credential_access_count": stats[5] or 0,
+            "destructive_ops_count": stats[6] or 0,
+            "network_risk_count": stats[7] or 0,
+            "subprocess_count": stats[8] or 0,
+            "runs_affected": stats[9] or 0,
+            "last_scan_at": stats[10],
+        }
+
+        # Count unscanned runs
+        scanned_run_ids = conn.execute(
+            "SELECT DISTINCT run_id FROM security_events"
+        ).fetchall()
+        scanned = {r[0] for r in scanned_run_ids}
+
+        all_runs = conn.execute(
+            "SELECT run_id FROM runs WHERE agent_name NOT LIKE '%gateway%' "
+            "AND (is_primary = 1 OR is_primary IS NULL)"
+        ).fetchall()
+        total_runs = {r[0] for r in all_runs}
+        result["unscanned_runs_count"] = len(total_runs - scanned)
+
+        conn.close()
+        return result
+
+    @staticmethod
+    def get_unscanned_run_ids() -> list[str]:
+        """Get run IDs that haven't been scanned yet."""
+        if not INDEX_DB.exists():
+            return []
+        conn = sqlite3.connect(str(INDEX_DB), check_same_thread=False)
+        conn.execute(f"CREATE TABLE IF NOT EXISTS security_events ({', '.join(SECURITY_EVENTS_COLS)})")
+
+        scanned = conn.execute(
+            "SELECT DISTINCT run_id FROM security_events"
+        ).fetchall()
+        scanned_ids = {r[0] for r in scanned}
+
+        all_runs = conn.execute(
+            "SELECT run_id FROM runs WHERE agent_name NOT LIKE '%gateway%' "
+            "AND (is_primary = 1 OR is_primary IS NULL)"
+        ).fetchall()
+        total_runs = {r[0] for r in all_runs}
+        conn.close()
+        return list(total_runs - scanned_ids)
+
+    @staticmethod
+    def add_to_skip_list(pattern_hash: str, event_type: str, reason: str = "") -> None:
+        """Add a pattern hash to the avoid list."""
+        if not INDEX_DB.exists():
+            return
+        conn = sqlite3.connect(str(INDEX_DB), check_same_thread=False)
+        conn.execute(f"CREATE TABLE IF NOT EXISTS security_skip_list ({', '.join(SECURITY_SKIP_LIST_COLS)})")
+        try:
+            conn.execute(
+                "INSERT INTO security_skip_list (id, pattern_hash, event_type, reason, created_at) VALUES (?, ?, ?, ?, ?)",
+                (str(_uuid.uuid4()), pattern_hash, event_type, reason, time.time())
+            )
+            conn.commit()
+        except sqlite3.IntegrityError:
+            pass # Already exists
+        finally:
+            conn.close()
+
+    @staticmethod
+    def is_in_skip_list(pattern_hash: str, event_type: str) -> bool:
+        """Check if a pattern hash is in the skip list for this event type."""
+        if not INDEX_DB.exists():
+            return False
+        conn = sqlite3.connect(str(INDEX_DB), check_same_thread=False)
+        try:
+            row = conn.execute(
+                "SELECT 1 FROM security_skip_list WHERE pattern_hash = ? AND event_type = ?",
+                (pattern_hash, event_type)
+            ).fetchone()
+            return bool(row)
+        except sqlite3.OperationalError:
+            return False # Table might not exist yet
+        finally:
+            conn.close()
+        return False
+
+    @staticmethod
+    def mark_events_false_positive(pattern_hash: str, event_type: str) -> None:
+        """Update existing matching unacknowledged events to be false positives."""
+        import hashlib
+        if not INDEX_DB.exists():
+            return
+        conn = sqlite3.connect(str(INDEX_DB), check_same_thread=False)
+        conn.row_factory = sqlite3.Row
+        try:
+            candidates = conn.execute(
+                "SELECT id, raw_command, network_target FROM security_events "
+                "WHERE event_type = ? AND is_false_positive = 0 AND acknowledged = 0",
+                (event_type,)
+            ).fetchall()
+            
+            to_update = []
+            for row in candidates:
+                val = row["network_target"] if row["network_target"] else (row["raw_command"] or "")
+                h = hashlib.sha256(val.encode("utf-8")).hexdigest()
+                if h == pattern_hash:
+                    to_update.append((row["id"],))
+            
+            if to_update:
+                conn.executemany("UPDATE security_events SET is_false_positive = 1 WHERE id = ?", to_update)
+                conn.commit()
+        except sqlite3.OperationalError:
+            pass # Table might not exist yet
+        finally:
+            conn.close()
+

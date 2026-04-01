@@ -253,22 +253,59 @@ function compressChildren(children: TraceNode[]): {
 }
 
 // ── Main: Compress Trace → Chapters ─────────────────────────────
+// Only prompt-type top-level nodes become chapters.
+// Non-prompt nodes are folded into the nearest prompt chapter.
 
 export function compressTraceToChapters(tree: TraceNode[]): Chapter[] {
     const chapters: Chapter[] = [];
 
+    // Collect orphan non-prompt nodes that appear before the first prompt
+    let orphanBuffer: TraceNode[] = [];
+
     for (let ci = 0; ci < tree.length; ci++) {
-        const promptNode = tree[ci];
+        const node = tree[ci];
+
+        // Non-prompt top-level nodes → buffer them for folding
+        if (node.type !== 'prompt') {
+            if (chapters.length > 0) {
+                // Fold into the most recent chapter
+                const lastChapter = chapters[chapters.length - 1];
+                const { nodes: extraNodes, successCount, errorCount, timeoutCount, models } = compressChildren([node]);
+                lastChapter.nodes.push(...extraNodes);
+                lastChapter.stepCount += extraNodes.length;
+                lastChapter.errorCount += errorCount + timeoutCount;
+                lastChapter.timeoutCount += timeoutCount;
+                lastChapter.successCount += successCount;
+                for (const m of models) {
+                    if (!lastChapter.llmModels.includes(m)) lastChapter.llmModels.push(m);
+                }
+                const nodeEnd = node.endMs || node.startMs;
+                lastChapter.durationMs = Math.max(lastChapter.durationMs, nodeEnd - lastChapter.startMs);
+                lastChapter.durationText = formatTraceDuration(lastChapter.durationMs);
+                const { health, label: healthLabel } = computeHealth(lastChapter.successCount, lastChapter.errorCount, lastChapter.stepCount);
+                lastChapter.health = health;
+                lastChapter.healthLabel = healthLabel;
+            } else {
+                // No chapter yet — buffer for later
+                orphanBuffer.push(node);
+            }
+            continue;
+        }
+
+        // This is a prompt node → create a chapter
+        const promptNode = node;
 
         // Build title from prompt text
-        const title = promptNode.type === 'prompt'
-            ? (promptNode.label.length > 55
-                ? promptNode.label.slice(0, 55) + '…'
-                : promptNode.label)
-            : `Chapter ${ci + 1}`;
+        const title = promptNode.label.length > 55
+            ? promptNode.label.slice(0, 55) + '…'
+            : promptNode.label;
+
+        // Include any buffered orphan nodes as extra children
+        const allChildren = [...orphanBuffer, ...promptNode.children];
+        orphanBuffer = [];
 
         // Compress children
-        const { nodes, successCount, errorCount, timeoutCount, models } = compressChildren(promptNode.children);
+        const { nodes, successCount, errorCount, timeoutCount, models } = compressChildren(allChildren);
 
         // Total steps = LLM + tool nodes (not system)
         const stepCount = nodes.length;
@@ -297,6 +334,35 @@ export function compressTraceToChapters(tree: TraceNode[]): Chapter[] {
             nodes,
             traceNodeId: promptNode.id,
             startMs: promptNode.startMs,
+        });
+    }
+
+    // If there are still orphan nodes and no chapters were created,
+    // create a single synthetic chapter for them
+    if (orphanBuffer.length > 0 && chapters.length === 0) {
+        const { nodes, successCount, errorCount, timeoutCount, models } = compressChildren(orphanBuffer);
+        const stepCount = nodes.length;
+        const totalErrors = errorCount + timeoutCount;
+        const { health, label: healthLabel } = computeHealth(successCount, totalErrors, stepCount);
+        const startMs = orphanBuffer[0].startMs;
+        const endMs = orphanBuffer[orphanBuffer.length - 1].endMs || startMs;
+
+        chapters.push({
+            id: 'chapter-orphan',
+            title: 'Agent Execution',
+            health,
+            healthLabel,
+            status: orphanBuffer[orphanBuffer.length - 1].status,
+            durationMs: endMs - startMs,
+            durationText: formatTraceDuration(endMs - startMs),
+            stepCount,
+            errorCount: totalErrors,
+            timeoutCount,
+            successCount,
+            llmModels: Array.from(models),
+            nodes,
+            traceNodeId: orphanBuffer[0].id,
+            startMs,
         });
     }
 

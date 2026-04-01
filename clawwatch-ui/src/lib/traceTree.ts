@@ -352,6 +352,9 @@ export function buildTraceTree(enrichedEvents: EnrichedEvent[]): TraceNode[] {
     // Track the last user_prompt text so we can deduplicate the
     // llm_call_start with channel that carries the same prompt
     let lastUserPromptText = '';
+    // Flag: suppress the next llm_call_start with channel after a user_prompt
+    // (they always represent the same turn, even with slightly different text)
+    let justSawUserPrompt = false;
     // Buffer for agent_end events — defer until after message lifecycle events
     let pendingAgentEnd: EnrichedEvent | null = null;
     let pendingAgentEndIndex = -1;
@@ -416,6 +419,7 @@ export function buildTraceTree(enrichedEvents: EnrichedEvent[]): TraceNode[] {
 
             const promptText = event.prompt_preview || event.goal || 'User prompt';
             lastUserPromptText = promptText;
+            justSawUserPrompt = true;
             currentPromptNode = {
                 id: `prompt-${event.event_id}`,
                 type: 'prompt',
@@ -442,9 +446,8 @@ export function buildTraceTree(enrichedEvents: EnrichedEvent[]): TraceNode[] {
         // ── agent_start after agent_end → new conversation turn ──
         // This catches the restart-after-failure pattern where the agent
         // restarts without a new user_prompt event.
-        if (event.event_type === 'agent_start' && lastEventWasAgentEnd) {
+        if (event.event_type === 'agent_start' && lastEventWasAgentEnd && !currentPromptNode) {
             // Finalize previous prompt before creating new one
-            if (currentPromptNode) finalizePromptStatus(currentPromptNode);
             flushSystemBuffer(getTargetChildren(), getDepth());
             llmAttemptCounter = 0;
 
@@ -483,10 +486,16 @@ export function buildTraceTree(enrichedEvents: EnrichedEvent[]): TraceNode[] {
             event.tool_name && CHANNEL_TOOLS.has(event.tool_name.toLowerCase())) {
             const promptText = event.prompt_preview || event.goal || 'User prompt';
 
-            // If a user_prompt already created a turn with the same text, skip this one
-            // (this deduplicates the user_prompt + llm_call_start:channel pair)
+            // If we JUST saw a user_prompt event, this channel llm_call_start
+            // is always the same turn — skip it unconditionally to prevent duplicates
+            // (the texts may differ slightly due to truncation/formatting)
+            if (justSawUserPrompt && currentPromptNode) {
+                justSawUserPrompt = false;
+                continue;
+            }
+
+            // Legacy fallback: also deduplicate by exact text match
             if (currentPromptNode && promptText === lastUserPromptText) {
-                // Already have this prompt — skip the duplicate
                 continue;
             }
 
@@ -523,6 +532,9 @@ export function buildTraceTree(enrichedEvents: EnrichedEvent[]): TraceNode[] {
             // Skip — don't process as a regular llm_call_start
             continue;
         }
+
+        // Reset the justSawUserPrompt flag on any non-channel event
+        justSawUserPrompt = false;
 
         // ── System tools (preprocess, bootstrap) → buffer ──
         if ((event.event_type === 'tool_call_start' || event.event_type === 'tool_call_end') &&

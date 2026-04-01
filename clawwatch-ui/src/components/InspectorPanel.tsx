@@ -3,10 +3,13 @@
 // Input, Output, Metadata, and Raw JSON.
 
 import { useState } from 'react';
-import { X, Clock, Coins, Cpu, AlertTriangle, ShieldCheck } from 'lucide-react';
+import {
+    AlertTriangle, ShieldCheck, X, Clock, Coins, Cpu
+} from 'lucide-react';
 import type { TraceNode } from '../lib/traceTree';
 import { estimateCost } from '../lib/cost';
 import { formatTraceDuration } from '../lib/traceTree';
+import { markSecurityEventSafe } from '../lib/api';
 
 // ── Tab types ────────────────────────────────────────────────────
 
@@ -30,6 +33,17 @@ export default function InspectorPanel({ node, onClose }: InspectorPanelProps) {
     if (!primaryEvent) return null;
 
     const [activeTab, setActiveTab] = useState<TabId>('input');
+    const [markSafeState, setMarkSafeState] = useState<'idle' | 'loading' | 'done'>('idle');
+
+    const handleMarkSafe = async (eventId: string) => {
+        setMarkSafeState('loading');
+        try {
+            await markSecurityEventSafe(eventId);
+            setMarkSafeState('done');
+        } catch {
+            setMarkSafeState('idle');
+        }
+    };
 
     // Determine available tabs
     const hasInput = !!(primaryEvent.prompt_preview || primaryEvent.tool_args);
@@ -37,9 +51,9 @@ export default function InspectorPanel({ node, onClose }: InspectorPanelProps) {
         primaryEvent.error_message || primaryEvent.error_traceback);
 
     const tabs: TabDef[] = [
+        { id: 'metadata', label: 'Metadata', available: true },
         { id: 'input', label: 'Input', available: hasInput },
         { id: 'output', label: 'Output', available: hasOutput },
-        { id: 'metadata', label: 'Metadata', available: true },
         { id: 'raw', label: 'Raw JSON', available: true },
     ];
 
@@ -230,17 +244,92 @@ export default function InspectorPanel({ node, onClose }: InspectorPanelProps) {
                             </div>
                         )}
 
+                        {/* Security events */}
+                        {primaryEvent.security_events && primaryEvent.security_events.length > 0 && (
+                            <div className="inspector-section">
+                                <div className="inspector-section-label">SECURITY ALERTS</div>
+                                <div className="inspector-rules">
+                                    {primaryEvent.security_events.map((se, i) => {
+                                        const secColor = se.severity === 'critical' ? '#ef4444' : se.severity === 'high' ? '#f97316' : se.severity === 'medium' ? '#eab308' : '#3b82f6';
+                                        return (
+                                            <div key={i} className={`inspector-rule inspector-rule--${se.severity}`} style={{ marginBottom: '12px', borderLeft: `2px solid ${secColor}`, paddingLeft: '8px' }}>
+                                                <div className="inspector-rule-head" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+                                                    <span className="inspector-rule-name" style={{ fontWeight: 600, color: '#fff' }}>{se.label}</span>
+                                                    <span className={`inspector-rule-level inspector-rule-level--${se.severity}`} style={{ fontSize: '9px', padding: '2px 6px', borderRadius: '4px', textTransform: 'uppercase', background: `${secColor}33`, color: secColor }}>
+                                                        {se.severity}
+                                                    </span>
+                                                </div>
+                                                <div className="inspector-rule-desc" style={{
+                                                    fontSize: '10px',
+                                                    color: 'rgba(255,255,255,0.7)',
+                                                    fontFamily: 'var(--font-mono)',
+                                                    whiteSpace: 'pre-wrap',
+                                                    wordBreak: 'break-word',
+                                                    maxHeight: '150px',
+                                                    overflowY: 'auto',
+                                                    background: 'rgba(0,0,0,0.3)',
+                                                    padding: '8px',
+                                                    borderRadius: '4px',
+                                                    border: '1px solid rgba(255,255,255,0.05)'
+                                                }}>
+                                                    {se.description}
+                                                </div>
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            </div>
+                        )}
+
                         {/* Risk rules */}
                         {primaryEvent.risk && primaryEvent.risk.rules.length > 0 && (
                             <div className="inspector-section">
-                                <div className="inspector-section-label">RISK RULES</div>
-                                {primaryEvent.risk.rules.map((rule, i) => (
-                                    <div key={i} className={`inspector-risk-rule inspector-risk-rule--${rule.level}`}>
-                                        <ShieldCheck size={12} />
-                                        <span className="inspector-risk-name">{rule.name}</span>
-                                        <span className="inspector-risk-expl">{rule.explanation}</span>
-                                    </div>
-                                ))}
+                                <div className="inspector-section-label" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                    <span>RISK RULES</span>
+                                    {markSafeState !== 'done' ? (
+                                        <button
+                                            onClick={() => handleMarkSafe(primaryEvent.event_id)}
+                                            style={{
+                                                background: 'transparent', border: '1px solid currentColor', color: 'inherit',
+                                                padding: '2px 8px', borderRadius: '4px', fontSize: '10px', cursor: 'pointer',
+                                                display: 'flex', alignItems: 'center', gap: '4px', opacity: 0.7
+                                            }}
+                                            disabled={markSafeState === 'loading'}
+                                        >
+                                            <ShieldCheck size={10} /> {markSafeState === 'loading' ? 'Marking...' : 'Mark Safe'}
+                                        </button>
+                                    ) : (
+                                        <span style={{ fontSize: '10px', color: '#10b981', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                            <ShieldCheck size={10} /> Marked Safe
+                                        </span>
+                                    )}
+                                </div>
+                                {primaryEvent.risk.rules.map((rule, i) => {
+                                    const rColor = rule.level === 'critical' ? '#ef4444' : rule.level === 'high' ? '#f97316' : rule.level === 'medium' ? '#eab308' : '#3b82f6';
+                                    return (
+                                        <div key={i} className={`inspector-rule inspector-rule--${rule.level}`} style={{ marginBottom: '12px', borderLeft: `2px solid ${rColor}`, paddingLeft: '8px' }}>
+                                            <div className="inspector-rule-head" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+                                                <span className="inspector-rule-name" style={{ fontWeight: 600, color: '#fff' }}>{rule.name}</span>
+                                                <span className={`inspector-rule-level inspector-rule-level--${rule.level}`} style={{ fontSize: '9px', padding: '2px 6px', borderRadius: '4px', textTransform: 'uppercase', background: `${rColor}33`, color: rColor }}>
+                                                    {rule.level.toUpperCase()}
+                                                </span>
+                                            </div>
+                                            <div className="inspector-rule-desc" style={{
+                                                fontSize: '10px',
+                                                color: 'rgba(255,255,255,0.7)',
+                                                fontFamily: 'var(--font-mono)',
+                                                whiteSpace: 'pre-wrap',
+                                                wordBreak: 'break-word',
+                                                maxHeight: '150px',
+                                                overflowY: 'auto',
+                                                background: 'rgba(0,0,0,0.3)',
+                                                padding: '8px',
+                                                borderRadius: '4px',
+                                                border: '1px solid rgba(255,255,255,0.05)'
+                                            }}>{rule.explanation}</div>
+                                        </div>
+                                    );
+                                })}
                             </div>
                         )}
                     </div>
@@ -261,10 +350,33 @@ export default function InspectorPanel({ node, onClose }: InspectorPanelProps) {
 // ── MetaRow helper ───────────────────────────────────────────────
 
 function MetaRow({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
+    if (!value) return null;
     return (
-        <div className="inspector-meta-row">
-            <span className="inspector-meta-label">{label}</span>
-            <span className={`inspector-meta-value${mono ? ' inspector-meta-value--mono' : ''}`}>
+        <div className="inspector-meta-row" style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'baseline',
+            padding: '8px 12px',
+            background: 'rgba(255,255,255,0.02)',
+            borderRadius: '4px',
+            marginBottom: '6px',
+            border: '1px solid rgba(255,255,255,0.05)'
+        }}>
+            <span className="inspector-meta-label" style={{
+                color: 'rgba(255,255,255,0.5)',
+                fontSize: '10px',
+                textTransform: 'uppercase',
+                letterSpacing: '0.05em',
+                flexShrink: 0,
+                marginRight: '16px'
+            }}>{label}</span>
+            <span className={`inspector-meta-value${mono ? ' inspector-meta-value--mono' : ''}`} style={{
+                color: 'rgba(255,255,255,0.95)',
+                fontSize: '11px',
+                fontFamily: mono ? 'var(--font-mono)' : 'inherit',
+                wordBreak: 'break-all',
+                textAlign: 'right'
+            }}>
                 {value}
             </span>
         </div>

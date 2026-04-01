@@ -132,6 +132,33 @@ def _make_handler(store_cls: type = EventStore):
                 events = store_cls.get_exchange_events(exchange_id, run_id)
                 self._json_response(events)
 
+            # ── Security routes ────────────────────────────────
+            elif path == "/api/v1/security/events":
+                qs = self.path.split("?")[1] if "?" in self.path else ""
+                params: dict[str, str] = {}
+                for param in qs.split("&"):
+                    if "=" in param:
+                        k, v = param.split("=", 1)
+                        params[k] = v
+                events = store_cls.get_security_events(
+                    severity=params.get("severity", ""),
+                    run_id=params.get("run_id", ""),
+                    acknowledged=params.get("acknowledged", ""),
+                    agent_id=params.get("agent_id", ""),
+                    limit=int(params.get("limit", "200")),
+                    offset=int(params.get("offset", "0")),
+                )
+                self._json_response(events)
+
+            elif path.startswith("/api/v1/security/events/run/"):
+                run_id = path.split("/")[-1]
+                events = store_cls.get_security_events_for_run(run_id)
+                self._json_response(events)
+
+            elif path == "/api/v1/security/stats":
+                stats = store_cls.get_security_stats()
+                self._json_response(stats)
+
             elif path == "/api/v1/events/stream":
                 self._handle_sse()
 
@@ -171,6 +198,79 @@ def _make_handler(store_cls: type = EventStore):
                     self._json_response({"ok": True})
                     return
 
+            # ── Security scan route ───────────────────────────
+            if path == "/api/v1/security/scan":
+                from clawwatch.security import classify_run_events, SecurityEvent
+                length = int(self.headers.get("Content-Length", 0))
+                body = json.loads(self.rfile.read(length)) if length else {}
+                run_ids = body.get("run_ids", []) or store_cls.get_unscanned_run_ids()
+
+                total_events = 0
+                for rid in run_ids:
+                    events = store_cls.get_run_events(rid)
+                    if not events:
+                        continue
+                    agent_name = events[0].get("agent_name", "openclaw") if events else "openclaw"
+                    workdir = events[0].get("workdir", "") if events else ""
+                    sec_events = classify_run_events(events, workdir)
+                    for se in sec_events:
+                        se.run_id = rid
+                        se.agent_id = agent_name
+                        
+                        import hashlib
+                        val = se.network_target if se.network_target else (se.raw_command or "")
+                        pattern_hash = hashlib.sha256(val.encode("utf-8")).hexdigest()
+                        if store_cls.is_in_skip_list(pattern_hash, se.event_type):
+                            continue
+                            
+                        store_cls.insert_security_event(se.to_dict())
+                        total_events += 1
+                    # Mark scanned runs with no findings: insert a sentinel
+                    if not sec_events:
+                        store_cls.insert_security_event({
+                            "id": str(__import__("uuid").uuid4()),
+                            "run_id": rid,
+                            "agent_id": agent_name,
+                            "event_type": "SCAN_CLEAN",
+                            "severity": "info",
+                            "label": "Clean Scan",
+                            "description": "No security events detected",
+                            "detected_at": __import__("time").time(),
+                            "acknowledged": 1,
+                        })
+
+                stats = store_cls.get_security_stats()
+                self._json_response({
+                    "ok": True,
+                    "runs_scanned": len(run_ids),
+                    "events_found": total_events,
+                    "stats": stats,
+                })
+                return
+
+            if path.startswith("/api/v1/security/events/") and path.endswith("/mark-safe"):
+                event_id = path.split("/")[-2]
+                
+                import sqlite3
+                from clawwatch.store import INDEX_DB
+                if INDEX_DB.exists():
+                    conn = sqlite3.connect(str(INDEX_DB), check_same_thread=False)
+                    conn.row_factory = sqlite3.Row
+                    row = conn.execute("SELECT * FROM security_events WHERE id = ?", (event_id,)).fetchone()
+                    conn.close()
+                    
+                    if row:
+                        import hashlib
+                        val = row["network_target"] if row["network_target"] else (row["raw_command"] or "")
+                        pattern_hash = hashlib.sha256(val.encode("utf-8")).hexdigest()
+                        event_type = row["event_type"]
+                        
+                        store_cls.add_to_skip_list(pattern_hash, event_type, reason="Marked safe via UI")
+                        store_cls.mark_events_false_positive(pattern_hash, event_type)
+                
+                self._json_response({"ok": True, "marked_safe": True})
+                return
+
             self.send_response(404)
             self._cors()
             self.end_headers()
@@ -194,6 +294,15 @@ def _make_handler(store_cls: type = EventStore):
                 ok = store_cls.rename_thread(thread_id, display_name)
                 self._json_response({"ok": ok})
                 return
+
+            # PATCH /api/v1/security/events/<id>/acknowledge
+            if path.startswith("/api/v1/security/events/") and path.endswith("/acknowledge"):
+                parts = path.split("/")
+                if len(parts) >= 6:
+                    event_id = parts[5]
+                    result = store_cls.acknowledge_security_event(event_id)
+                    self._json_response(result)
+                    return
 
             self.send_response(404)
             self._cors()

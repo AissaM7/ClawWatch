@@ -157,6 +157,7 @@ export interface EnrichedEvent extends ClawEvent {
   risk: RiskResult;
   goal_alignment: GoalAlignmentResult;
   description: string;
+  security_events?: SecurityEvent[];
 }
 
 // ── Thread / Task / Exchange hierarchy ───────────────────────────
@@ -217,4 +218,49 @@ export interface Exchange {
   cost_usd: number;
   risk_score: number | null;
   goal_alignment_pct: number | null;
+}
+
+// ── Security ────────────────────────────────────────────────────
+
+export type SecuritySeverity = 'critical' | 'high' | 'medium' | 'low' | 'info';
+
+export interface SecurityEvent {
+  id: string;
+  run_id: string;
+  agent_id: string;
+  event_type: string;
+  severity: SecuritySeverity;
+  label: string;
+  description: string;
+  raw_command: string | null;
+  file_path: string | null;
+  network_target: string | null;
+  detected_at: number;
+  run_timestamp: number | null;
+  acknowledged: boolean;
+  chapter_id: string | null;
+  trace_event_index: number | null;
+  is_false_positive: boolean;
+}
+
+export interface SecurityStats {
+  total_events: number;
+  critical_count: number;
+  high_count: number;
+  medium_count: number;
+  low_count: number;
+  credential_access_count: number;
+  destructive_ops_count: number;
+  network_risk_count: number;
+  subprocess_count: number;
+  runs_affected: number;
+  last_scan_at: number | null;
+  unscanned_runs_count: number;
+}
+
+export interface SecurityScanResult {
+  ok: boolean;
+  runs_scanned: number;
+  events_found: number;
+  stats: SecurityStats;
 }

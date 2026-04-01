@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
-import type { ClawEvent, EnrichedEvent } from '../lib/types';
-import { fetchRunEvents, createSSEConnection } from '../lib/api';
+import type { ClawEvent, EnrichedEvent, SecurityEvent as SecEvent } from '../lib/types';
+import { fetchRunEvents, createSSEConnection, fetchRunSecurityEvents } from '../lib/api';
 import { scoreEvent } from '../lib/risk';
 import AgentPathMiniMap from '../components/AgentPathMiniMap';
 import { scoreGoalAlignment, computeGoalDrift } from '../lib/goalAlignment';
@@ -13,17 +13,18 @@ import InspectorPanel from '../components/InspectorPanel';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import {
   ChevronDown, ChevronUp, Search,
-  Layers, AlertCircle, Cpu, Wrench, Activity
+  Layers, AlertCircle, Cpu, Wrench, Activity, ShieldAlert
 } from 'lucide-react';
 
 // ── Enrichment ──────────────────────────────────────────────────
 
-function enrichEvents(events: ClawEvent[], goal: string): EnrichedEvent[] {
+function enrichEvents(events: ClawEvent[], goal: string, secEvents: SecEvent[] = []): EnrichedEvent[] {
   return events.map(e => ({
     ...e,
     risk: scoreEvent(e, events),
     goal_alignment: scoreGoalAlignment(e, goal),
     description: buildDescription(e),
+    security_events: secEvents.filter(se => se.trace_event_index === e.sequence_num)
   }));
 }
 
@@ -42,6 +43,7 @@ export default function RunDetail() {
   const [initialized, setInitialized] = useState(false);
   const [searchText, setSearchText] = useState(searchParams.get('q') || '');
   const [typeFilter, setTypeFilter] = useState<string>(searchParams.get('type') || 'all');
+  const [securityEvents, setSecurityEvents] = useState<SecEvent[]>([]);
 
   // ── Effects ────────────────────────────────────────────────────
   useEffect(() => {
@@ -49,6 +51,9 @@ export default function RunDetail() {
     fetchRunEvents(runId)
       .then(events => { setRawEvents(events); setLoading(false); })
       .catch(() => setLoading(false));
+    fetchRunSecurityEvents(runId)
+      .then(evts => setSecurityEvents(evts.filter(e => e.event_type !== 'SCAN_CLEAN')))
+      .catch(() => { });
   }, [runId]);
 
   useEffect(() => {
@@ -61,7 +66,7 @@ export default function RunDetail() {
   // ── Derived data ───────────────────────────────────────────────
   const goal = rawEvents.length > 0 ? rawEvents[0].goal : '';
   const agentName = rawEvents.length > 0 ? rawEvents[0].agent_name : '';
-  const enrichedEvents = useMemo(() => enrichEvents(rawEvents, goal), [rawEvents, goal]);
+  const enrichedEvents = useMemo(() => enrichEvents(rawEvents, goal, securityEvents), [rawEvents, goal, securityEvents]);
 
   const filteredEvents = useMemo(() => {
     let events = enrichedEvents;
@@ -210,6 +215,12 @@ export default function RunDetail() {
             {stats.toolCalls} tools
           </span>
           <span className="trace-stat">{formatCost(stats.totalCost)}</span>
+          {securityEvents.length > 0 && (
+            <span className="trace-stat trace-stat--security">
+              <ShieldAlert size={12} />
+              {securityEvents.length} security
+            </span>
+          )}
           {runDurationMs > 0 && (
             <span className="trace-stat">{formatTraceDuration(runDurationMs)}</span>
           )}

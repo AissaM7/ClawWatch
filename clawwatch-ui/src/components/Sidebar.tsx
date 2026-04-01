@@ -1,14 +1,16 @@
 // ── Sidebar Navigation ──────────────────────────────────────────
-// Persistent left sidebar with primary nav, contextual run nav, and status footer.
+// Persistent left sidebar with 3-section nav: Main, Insights, Active Run.
 
 import { NavLink, useMatch, useLocation } from 'react-router-dom';
 import { useState, useEffect } from 'react';
 import {
+    LayoutDashboard,
     Bot,
     List,
     Activity,
     ShieldAlert,
     DollarSign,
+    Shield,
     PanelLeftClose,
     PanelLeft,
     Wifi,
@@ -64,20 +66,20 @@ export default function Sidebar() {
                 </NavLink>
             </div>
 
-            {/* ── Primary Nav ── */}
+            {/* ── Main Nav ── */}
             <nav className="sidebar-nav">
                 <div className="sidebar-section">
-                    {!collapsed && <div className="sidebar-section-label">Navigate</div>}
+                    {!collapsed && <div className="sidebar-section-label">Main</div>}
 
                     <NavLink
                         to="/"
                         className={({ isActive }) =>
                             `sidebar-item ${isActive && location.pathname === '/' ? 'sidebar-item--active' : ''}`
                         }
-                        title="Agents"
+                        title="Overview"
                     >
-                        <Bot size={18} className="sidebar-item-icon" />
-                        {!collapsed && <span className="sidebar-item-text">Agents</span>}
+                        <LayoutDashboard size={18} className="sidebar-item-icon" />
+                        {!collapsed && <span className="sidebar-item-text">Overview</span>}
                     </NavLink>
 
                     <NavLink
@@ -85,10 +87,50 @@ export default function Sidebar() {
                         className={({ isActive }) =>
                             `sidebar-item ${isActive ? 'sidebar-item--active' : ''}`
                         }
-                        title="All Runs"
+                        title="Runs"
                     >
                         <List size={18} className="sidebar-item-icon" />
-                        {!collapsed && <span className="sidebar-item-text">All Runs</span>}
+                        {!collapsed && <span className="sidebar-item-text">Runs</span>}
+                    </NavLink>
+
+                    <NavLink
+                        to="/agents"
+                        className={({ isActive }) =>
+                            `sidebar-item ${isActive ? 'sidebar-item--active' : ''}`
+                        }
+                        title="Agents"
+                    >
+                        <Bot size={18} className="sidebar-item-icon" />
+                        {!collapsed && <span className="sidebar-item-text">Agents</span>}
+                    </NavLink>
+                </div>
+
+                {/* ── Insights ── */}
+                <div className="sidebar-section">
+                    {!collapsed && <div className="sidebar-section-label">Insights</div>}
+                    {collapsed && <div className="sidebar-divider" />}
+
+
+                    <NavLink
+                        to="/usage"
+                        className={({ isActive }) =>
+                            `sidebar-item ${isActive ? 'sidebar-item--active' : ''}`
+                        }
+                        title="Usage & Cost"
+                    >
+                        <DollarSign size={18} className="sidebar-item-icon" />
+                        {!collapsed && <span className="sidebar-item-text">Usage</span>}
+                    </NavLink>
+
+                    <NavLink
+                        to="/security"
+                        className={({ isActive }) =>
+                            `sidebar-item ${isActive ? 'sidebar-item--active' : ''}`
+                        }
+                        title="Security"
+                    >
+                        <Shield size={18} className="sidebar-item-icon" />
+                        {!collapsed && <span className="sidebar-item-text">Security</span>}
                     </NavLink>
                 </div>
 
