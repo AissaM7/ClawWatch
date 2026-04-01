@@ -409,6 +409,18 @@ export function buildTraceTree(enrichedEvents: EnrichedEvent[]): TraceNode[] {
 
         // ── user_prompt → new conversation turn ──
         if (event.event_type === 'user_prompt') {
+            const promptText = event.prompt_preview || event.goal || 'User prompt';
+
+            // Deduplicate consecutive prompts that arise from backend merge groups
+            if (currentPromptNode && currentPromptNode.llmCalls === 0 && currentPromptNode.toolCalls === 0) {
+                if (promptText.length > currentPromptNode.label.length) {
+                    currentPromptNode.label = promptText;
+                }
+                currentPromptNode.events.push(event);
+                lastUserPromptText = currentPromptNode.label;
+                continue;
+            }
+
             // Flush any pending agent_end before starting new turn
             flushPendingAgentEnd();
             // Finalize previous prompt before creating new one
@@ -417,13 +429,13 @@ export function buildTraceTree(enrichedEvents: EnrichedEvent[]): TraceNode[] {
             flushSystemBuffer(getTargetChildren(), getDepth());
             llmAttemptCounter = 0;
 
-            const promptText = event.prompt_preview || event.goal || 'User prompt';
-            lastUserPromptText = promptText;
+            const finalPromptText = event.prompt_preview || event.goal || 'User prompt';
+            lastUserPromptText = finalPromptText;
             justSawUserPrompt = true;
             currentPromptNode = {
                 id: `prompt-${event.event_id}`,
                 type: 'prompt',
-                label: promptText,
+                label: finalPromptText,
                 status: 'running',
                 depth: 0,
                 startMs: event.run_offset_ms,
