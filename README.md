@@ -6,7 +6,9 @@
   <em>Real-time observability, risk scoring &amp; hallucination detection for autonomous AI agents.</em>
 </p>
 
-https://github.com/AissaM7/ClawWatch/raw/main/assets/ClawWatchDemo.mp4
+<p align="center">
+  <video src="https://media.githubusercontent.com/media/AissaM7/ClawWatch/main/assets/ClawWatchDemo.mp4" controls="controls" width="100%" style="max-width: 800px; border-radius: 8px;"></video>
+</p>
 
 <p align="center">
   <a href="#quick-start">Quick Start</a> ·
