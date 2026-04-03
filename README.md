@@ -7,6 +7,10 @@
 </p>
 
 <p align="center">
+  <video src="./assets/ClawWatchDemo.mp4" controls="controls" width="100%" style="max-width: 800px; border-radius: 8px;"></video>
+</p>
+
+<p align="center">
   <a href="#quick-start">Quick Start</a> ·
   <a href="#architecture">Architecture</a> ·
   <a href="#plugin-integration">Plugin Integration</a> ·
