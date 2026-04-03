@@ -7,7 +7,7 @@
 </p>
 
 <p align="center">
-  <video src="https://media.githubusercontent.com/media/AissaM7/ClawWatch/main/assets/ClawWatchDemo.mp4" controls="controls" width="100%" style="max-width: 800px; border-radius: 8px;"></video>
+  <img src="./assets/ClawWatchDemo.gif" alt="ClawWatch Demo" width="100%" />
 </p>
 
 <p align="center">
